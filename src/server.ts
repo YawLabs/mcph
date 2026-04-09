@@ -93,6 +93,10 @@ export class ConnectServer {
     });
   }
 
+  private handleUpstreamDisconnect(namespace: string): void {
+    log("warn", "Upstream disconnect detected, will auto-reconnect on next use", { namespace });
+  }
+
   private rebuildRoutes(): void {
     this.toolRoutes = buildToolRoutes(this.connections);
     this.resourceRoutes = buildResourceRoutes(this.connections);
@@ -161,8 +165,42 @@ export class ConnectServer {
       return result;
     }
 
-    // Route to upstream and track usage for auto-deactivate
+    // Route to upstream — auto-reconnect if disconnected
     const route = this.toolRoutes.get(name);
+    if (route) {
+      const conn = this.connections.get(route.namespace);
+      if (conn && conn.status === "error") {
+        const serverConfig = this.config?.servers.find((s) => s.namespace === route.namespace);
+        if (serverConfig) {
+          try {
+            await disconnectFromUpstream(conn);
+            const newConn = await connectToUpstream(serverConfig, (ns) => this.handleUpstreamDisconnect(ns));
+            this.connections.set(route.namespace, newConn);
+            this.rebuildRoutes();
+            log("info", "Auto-reconnected to upstream", { namespace: route.namespace });
+          } catch (err: any) {
+            log("error", "Auto-reconnect failed", { namespace: route.namespace, error: err.message });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    'Server "' +
+                    route.namespace +
+                    '" disconnected and auto-reconnect failed: ' +
+                    err.message +
+                    '. Try mcp_connect_activate("' +
+                    route.namespace +
+                    '") to manually reconnect.',
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+      }
+    }
+
     const startMs = Date.now();
     const result = await routeToolCall(name, args, this.toolRoutes, this.connections);
     const latencyMs = Date.now() - startMs;
@@ -200,7 +238,11 @@ export class ConnectServer {
       if (!server.isActive) continue;
 
       const connection = this.connections.get(server.namespace);
-      const status = connection ? "ACTIVE (" + connection.tools.length + " tools)" : "available";
+      const status = connection
+        ? connection.status === "error"
+          ? "ERROR (disconnected, will auto-reconnect on use)"
+          : "ACTIVE (" + connection.tools.length + " tools)"
+        : "available";
 
       lines.push("  " + server.namespace + " — " + server.name + " [" + status + "] (" + server.type + ")");
     }
@@ -263,7 +305,7 @@ export class ConnectServer {
     }
 
     try {
-      const connection = await connectToUpstream(serverConfig);
+      const connection = await connectToUpstream(serverConfig, (ns) => this.handleUpstreamDisconnect(ns));
       this.connections.set(namespace, connection);
       this.idleCallCounts.set(namespace, 0);
       this.rebuildRoutes();

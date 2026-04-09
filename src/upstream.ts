@@ -12,7 +12,10 @@ import type {
 
 const CONNECT_TIMEOUT = 15_000;
 
-export async function connectToUpstream(config: UpstreamServerConfig): Promise<UpstreamConnection> {
+export async function connectToUpstream(
+  config: UpstreamServerConfig,
+  onDisconnect?: (namespace: string) => void,
+): Promise<UpstreamConnection> {
   const client = new Client({ name: "mcp-connect", version: "0.1.0" }, { capabilities: {} });
 
   let transport: StdioClientTransport | StreamableHTTPClientTransport;
@@ -46,12 +49,24 @@ export async function connectToUpstream(config: UpstreamServerConfig): Promise<U
 
   log("info", "Connected to upstream", { name: config.name, namespace: config.namespace, type: config.type });
 
+  // Detect unexpected disconnects
+  const connection: UpstreamConnection = {} as UpstreamConnection;
+  client.onclose = () => {
+    if (connection.status === "connected") {
+      connection.status = "error";
+      connection.error = "Upstream disconnected unexpectedly";
+      log("warn", "Upstream disconnected unexpectedly", { namespace: config.namespace });
+      if (onDisconnect) onDisconnect(config.namespace);
+    }
+  };
+
   // Fetch tools, resources, prompts
   const tools = await fetchToolsFromUpstream(client, config.namespace);
   const resources = await fetchResourcesFromUpstream(client, config.namespace);
   const prompts = await fetchPromptsFromUpstream(client, config.namespace);
 
-  return {
+  // Populate the connection object (referenced by onclose handler above)
+  Object.assign(connection, {
     config,
     client,
     transport,
@@ -59,8 +74,10 @@ export async function connectToUpstream(config: UpstreamServerConfig): Promise<U
     resources,
     prompts,
     health: { totalCalls: 0, errorCount: 0, totalLatencyMs: 0 },
-    status: "connected",
-  };
+    status: "connected" as const,
+  });
+
+  return connection;
 }
 
 export async function disconnectFromUpstream(connection: UpstreamConnection): Promise<void> {
