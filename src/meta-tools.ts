@@ -5,7 +5,13 @@ export const META_TOOLS = {
       "List all available MCP servers. Call this FIRST before activating anything. Only activate servers you need for the CURRENT task — each one adds tools to your context. Shows server names, namespaces, tool counts, and activation status.",
     inputSchema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        context: {
+          type: "string",
+          description:
+            "Optional: describe the current task or conversation context. Servers will be sorted by relevance to help you pick the right one.",
+        },
+      },
     },
     annotations: {
       title: "Discover MCP Servers",

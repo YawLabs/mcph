@@ -30,6 +30,7 @@ import {
   routeResourceRead,
   routeToolCall,
 } from "./proxy.js";
+import { scoreRelevance } from "./relevance.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { connectToUpstream, disconnectFromUpstream } from "./upstream.js";
 
@@ -144,7 +145,7 @@ export class ConnectServer {
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
     if (name === META_TOOLS.discover.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "discover", latencyMs: null, success: true });
-      return this.handleDiscover();
+      return this.handleDiscover(args.context as string | undefined);
     }
     if (name === META_TOOLS.activate.name) {
       const result = await this.handleActivate(args.server as string);
@@ -242,7 +243,7 @@ export class ConnectServer {
     return result;
   }
 
-  private handleDiscover(): { content: Array<{ type: string; text: string }> } {
+  private handleDiscover(context?: string): { content: Array<{ type: string; text: string }> } {
     if (!this.config || this.config.servers.length === 0) {
       return {
         content: [
@@ -254,11 +255,25 @@ export class ConnectServer {
       };
     }
 
-    const lines: string[] = ["Available MCP servers:\n"];
+    const activeServers = this.config.servers.filter((s) => s.isActive);
 
-    for (const server of this.config.servers) {
-      if (!server.isActive) continue;
+    // Score and sort by relevance if context provided
+    let sorted: typeof activeServers;
+    const scores = new Map<string, number>();
+    if (context) {
+      for (const server of activeServers) {
+        const connection = this.connections.get(server.namespace);
+        const tools = connection?.tools ?? [];
+        scores.set(server.namespace, scoreRelevance(context, server, tools));
+      }
+      sorted = [...activeServers].sort((a, b) => (scores.get(b.namespace) ?? 0) - (scores.get(a.namespace) ?? 0));
+    } else {
+      sorted = activeServers;
+    }
 
+    const lines: string[] = [context ? "Servers ranked by relevance:\n" : "Available MCP servers:\n"];
+
+    for (const server of sorted) {
       const connection = this.connections.get(server.namespace);
       const status = connection
         ? connection.status === "error"
@@ -266,7 +281,10 @@ export class ConnectServer {
           : "ACTIVE (" + connection.tools.length + " tools)"
         : "available";
 
-      lines.push("  " + server.namespace + " — " + server.name + " [" + status + "] (" + server.type + ")");
+      const score = scores.get(server.namespace);
+      const relevance = score && score > 0 ? " (relevance: " + score + ")" : "";
+
+      lines.push("  " + server.namespace + " — " + server.name + " [" + status + "] (" + server.type + ")" + relevance);
     }
 
     const inactive = this.config.servers.filter((s) => !s.isActive);
