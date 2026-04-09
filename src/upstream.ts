@@ -39,13 +39,21 @@ export async function connectToUpstream(
     transport = new StreamableHTTPClientTransport(new URL(config.url));
   }
 
-  // Connect with timeout
-  const connectPromise = client.connect(transport);
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Connection timeout after " + CONNECT_TIMEOUT + "ms")), CONNECT_TIMEOUT),
-  );
-
-  await Promise.race([connectPromise, timeoutPromise]);
+  // Connect with timeout — clear timer on success, close client on timeout
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Connection timeout after " + CONNECT_TIMEOUT + "ms")), CONNECT_TIMEOUT);
+  });
+  try {
+    await Promise.race([client.connect(transport), timeoutPromise]);
+    clearTimeout(timer);
+  } catch (err) {
+    clearTimeout(timer);
+    try {
+      await client.close();
+    } catch {}
+    throw err;
+  }
 
   log("info", "Connected to upstream", { name: config.name, namespace: config.namespace, type: config.type });
 

@@ -71,8 +71,9 @@ export async function shutdownAnalytics(): Promise<void> {
     clearInterval(flushTimer);
     flushTimer = null;
   }
-  // Final flush — send everything remaining
-  while (buffer.length > 0) {
+  // Final flush — max 3 attempts, then discard
+  for (let i = 0; i < 3 && buffer.length > 0; i++) {
     await flush();
   }
+  buffer.length = 0;
 }

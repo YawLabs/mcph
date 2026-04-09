@@ -188,6 +188,7 @@ export class ConnectServer {
             const newConn = await connectToUpstream(serverConfig, (ns) => this.handleUpstreamDisconnect(ns));
             this.connections.set(route.namespace, newConn);
             this.rebuildRoutes();
+            await this.notifyAllListsChanged();
             log("info", "Auto-reconnected to upstream", { namespace: route.namespace });
           } catch (err: any) {
             log("error", "Auto-reconnect failed", { namespace: route.namespace, error: err.message });
@@ -457,6 +458,7 @@ export class ConnectServer {
         log("info", "Server removed or disabled in config, deactivating", { namespace });
         await disconnectFromUpstream(connection);
         this.connections.delete(namespace);
+        this.idleCallCounts.delete(namespace);
         changed = true;
         continue;
       }
@@ -472,6 +474,7 @@ export class ConnectServer {
         log("info", "Server config changed, deactivating stale connection", { namespace });
         await disconnectFromUpstream(connection);
         this.connections.delete(namespace);
+        this.idleCallCounts.delete(namespace);
         changed = true;
       }
     }
@@ -504,25 +507,46 @@ export class ConnectServer {
       return { content: [{ type: "text", text: "filepath is required." }], isError: true };
     }
 
+    // Security: only allow known MCP config filenames
+    const ALLOWED_FILENAMES = ["claude_desktop_config.json", "mcp.json", "settings.json", "mcp_config.json"];
+    const basename = filepath.split(/[/\\]/).pop() || "";
+    if (!ALLOWED_FILENAMES.includes(basename)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Only MCP config files are allowed: " + ALLOWED_FILENAMES.join(", ") + ". Got: " + basename,
+          },
+        ],
+        isError: true,
+      };
+    }
+
     try {
-      const resolved = filepath.startsWith("~") ? resolve(homedir(), filepath.slice(2)) : resolve(filepath);
+      const resolved = filepath.startsWith("~/") ? resolve(homedir(), filepath.slice(2)) : resolve(filepath);
       const raw = await readFile(resolved, "utf-8");
       const parsed = JSON.parse(raw);
 
-      // Support multiple config formats
-      const mcpServers: Record<string, any> = parsed.mcpServers || parsed;
+      // Only parse if file has mcpServers key
+      if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") {
+        return {
+          content: [{ type: "text", text: "No mcpServers object found in " + resolved }],
+          isError: true,
+        };
+      }
+      const mcpServers: Record<string, any> = parsed.mcpServers;
 
       if (typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
         return { content: [{ type: "text", text: "No mcpServers object found in " + resolved }], isError: true };
       }
 
+      // Note: env vars are NOT sent to the cloud for security — users must set them in the dashboard
       const servers: Array<{
         name: string;
         namespace: string;
         type: string;
         command?: string;
         args?: string[];
-        env?: Record<string, string>;
         url?: string;
       }> = [];
 
@@ -546,7 +570,7 @@ export class ConnectServer {
 
         if ((value as any).command) entry.command = (value as any).command;
         if ((value as any).args) entry.args = (value as any).args;
-        if ((value as any).env) entry.env = (value as any).env;
+        // env vars deliberately NOT sent — set them in the mcp.hosting dashboard
         if ((value as any).url) entry.url = (value as any).url;
 
         servers.push(entry);
@@ -591,7 +615,7 @@ export class ConnectServer {
               (body.skipped ? ", " + body.skipped + " skipped (already exist)" : "") +
               " from " +
               resolved +
-              ". Use mcp_connect_discover to see them.",
+              ". Note: environment variables (API keys, tokens) were NOT imported for security — set them at mcp.hosting. Use mcp_connect_discover to see imported servers.",
           },
         ],
       };
