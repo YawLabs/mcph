@@ -34,27 +34,54 @@ import { scoreRelevance } from "./relevance.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { connectToUpstream, disconnectFromUpstream } from "./upstream.js";
 
+declare const __VERSION__: string;
+
 const POLL_INTERVAL = 60_000;
+
+function resolveNamespaces(args: Record<string, unknown>): string[] {
+  if (Array.isArray(args.servers) && args.servers.length > 0) {
+    return args.servers as string[];
+  }
+  if (typeof args.server === "string" && args.server) {
+    return [args.server];
+  }
+  return [];
+}
+
+function envEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((k) => a[k] === b[k]);
+}
 
 export class ConnectServer {
   private server: Server;
   private connections = new Map<string, UpstreamConnection>();
   private config: ConnectConfig | null = null;
   private configVersion: string | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private toolRoutes = new Map<string, ToolRoute>();
   private resourceRoutes = new Map<string, ResourceRoute>();
   private promptRoutes = new Map<string, PromptRoute>();
   private idleCallCounts = new Map<string, number>();
+  private toolCache = new Map<string, Array<{ name: string; description?: string }>>();
 
-  private static readonly IDLE_CALL_THRESHOLD = 10;
+  private static readonly IDLE_CALL_THRESHOLD = (() => {
+    const env = process.env.MCP_CONNECT_IDLE_THRESHOLD;
+    if (!env) return 10;
+    const n = Number.parseInt(env, 10);
+    return Number.isFinite(n) && n >= 1 ? n : 10;
+  })();
 
   constructor(
     private apiUrl: string,
     private token: string,
   ) {
     this.server = new Server(
-      { name: "mcp-connect", version: "0.2.0" },
+      { name: "mcp-connect", version: typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0" },
       {
         capabilities: {
           tools: { listChanged: true },
@@ -98,9 +125,15 @@ export class ConnectServer {
     });
   }
 
-  private handleUpstreamDisconnect(namespace: string): void {
-    log("warn", "Upstream disconnect detected, will auto-reconnect on next use", { namespace });
-  }
+  private readonly onUpstreamDisconnect = (ns: string) => {
+    log("warn", "Upstream disconnected, will auto-reconnect on next use", { namespace: ns });
+  };
+
+  private readonly onUpstreamListChanged = (ns: string) => {
+    log("info", "Upstream list changed, rebuilding routes", { namespace: ns });
+    this.rebuildRoutes();
+    this.notifyAllListsChanged().catch(() => {});
+  };
 
   private rebuildRoutes(): void {
     this.toolRoutes = buildToolRoutes(this.connections);
@@ -109,7 +142,7 @@ export class ConnectServer {
   }
 
   private async notifyAllListsChanged(): Promise<void> {
-    await this.server.sendToolListChanged();
+    await this.server.sendToolListChanged().catch(() => {});
     await this.server.sendResourceListChanged().catch(() => {});
     await this.server.sendPromptListChanged().catch(() => {});
   }
@@ -148,31 +181,46 @@ export class ConnectServer {
       return this.handleDiscover(args.context as string | undefined);
     }
     if (name === META_TOOLS.activate.name) {
-      const result = await this.handleActivate(args.server as string);
-      recordConnectEvent({
-        namespace: (args.server as string) || null,
-        toolName: null,
-        action: "activate",
-        latencyMs: null,
-        success: !result.isError,
-      });
+      const namespaces = resolveNamespaces(args);
+      const result = await this.handleActivate(namespaces);
+      for (const ns of namespaces) {
+        recordConnectEvent({
+          namespace: ns,
+          toolName: null,
+          action: "activate",
+          latencyMs: null,
+          success: !result.isError,
+        });
+      }
       return result;
     }
     if (name === META_TOOLS.deactivate.name) {
-      const result = await this.handleDeactivate(args.server as string);
+      const namespaces = resolveNamespaces(args);
+      const result = await this.handleDeactivate(namespaces);
+      for (const ns of namespaces) {
+        recordConnectEvent({
+          namespace: ns,
+          toolName: null,
+          action: "deactivate",
+          latencyMs: null,
+          success: !result.isError,
+        });
+      }
+      return result;
+    }
+    if (name === META_TOOLS.import_config.name) {
+      const result = await this.handleImport(args.filepath as string);
       recordConnectEvent({
-        namespace: (args.server as string) || null,
+        namespace: null,
         toolName: null,
-        action: "deactivate",
+        action: "import",
         latencyMs: null,
         success: !result.isError,
       });
       return result;
     }
-    if (name === META_TOOLS.import_config.name) {
-      return this.handleImport(args.filepath as string);
-    }
     if (name === META_TOOLS.health.name) {
+      recordConnectEvent({ namespace: null, toolName: null, action: "health", latencyMs: null, success: true });
       return this.handleHealth();
     }
 
@@ -185,12 +233,17 @@ export class ConnectServer {
         if (serverConfig) {
           try {
             await disconnectFromUpstream(conn);
-            const newConn = await connectToUpstream(serverConfig, (ns) => this.handleUpstreamDisconnect(ns));
+            const newConn = await connectToUpstream(
+              serverConfig,
+              this.onUpstreamDisconnect,
+              this.onUpstreamListChanged,
+            );
             this.connections.set(route.namespace, newConn);
             this.rebuildRoutes();
             await this.notifyAllListsChanged();
             log("info", "Auto-reconnected to upstream", { namespace: route.namespace });
           } catch (err: any) {
+            conn.status = "error";
             log("error", "Auto-reconnect failed", { namespace: route.namespace, error: err.message });
             return {
               content: [
@@ -201,9 +254,9 @@ export class ConnectServer {
                     route.namespace +
                     '" disconnected and auto-reconnect failed: ' +
                     err.message +
-                    '. Try mcp_connect_activate("' +
+                    '. Use mcp_connect_activate with server "' +
                     route.namespace +
-                    '") to manually reconnect.',
+                    '" to manually reconnect.',
                 },
               ],
               isError: true,
@@ -264,7 +317,7 @@ export class ConnectServer {
     if (context) {
       for (const server of activeServers) {
         const connection = this.connections.get(server.namespace);
-        const tools = connection?.tools ?? [];
+        const tools = connection?.tools ?? this.toolCache.get(server.namespace) ?? [];
         scores.set(server.namespace, scoreRelevance(context, server, tools));
       }
       sorted = [...activeServers].sort((a, b) => (scores.get(b.namespace) ?? 0) - (scores.get(a.namespace) ?? 0));
@@ -286,6 +339,15 @@ export class ConnectServer {
       const relevance = score && score > 0 ? " (relevance: " + score + ")" : "";
 
       lines.push("  " + server.namespace + " — " + server.name + " [" + status + "] (" + server.type + ")" + relevance);
+
+      // Show cached tool names for servers that aren't currently connected
+      if (!connection) {
+        const cached = this.toolCache.get(server.namespace);
+        if (cached && cached.length > 0) {
+          const toolNames = cached.map((t) => t.name).join(", ");
+          lines.push("    known tools: " + toolNames);
+        }
+      }
     }
 
     const inactive = this.config.servers.filter((s) => !s.isActive);
@@ -299,15 +361,15 @@ export class ConnectServer {
     const activeCount = this.connections.size;
     const totalTools = Array.from(this.connections.values()).reduce((sum, c) => sum + c.tools.length, 0);
     lines.push("\n" + activeCount + " active, " + totalTools + " tools loaded.");
-    lines.push('Use mcp_connect_activate({ server: "namespace" }) to activate a server.');
+    lines.push("Use mcp_connect_activate to activate a server by its namespace.");
 
     return { content: [{ type: "text", text: lines.join("\n") }] };
   }
 
   private async handleActivate(
-    namespace: string,
+    namespaces: string[],
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
-    if (!namespace) {
+    if (namespaces.length === 0) {
       return {
         content: [
           { type: "text", text: "server namespace is required. Use mcp_connect_discover to see available servers." },
@@ -316,86 +378,109 @@ export class ConnectServer {
       };
     }
 
-    // Already active?
-    const existing = this.connections.get(namespace);
-    if (existing && existing.status === "connected") {
-      const toolNames = existing.tools.map((t) => t.namespacedName).join(", ");
-      return {
-        content: [
-          {
-            type: "text",
-            text: 'Server "' + namespace + '" is already active with ' + existing.tools.length + " tools: " + toolNames,
-          },
-        ],
-      };
+    const results: string[] = [];
+    let anyChanged = false;
+    let anyError = false;
+
+    for (const namespace of namespaces) {
+      // Already active?
+      const existing = this.connections.get(namespace);
+      if (existing && existing.status === "connected") {
+        results.push('"' + namespace + '" is already active with ' + existing.tools.length + " tools.");
+        continue;
+      }
+
+      // Find in config
+      const serverConfig = this.config?.servers.find((s) => s.namespace === namespace && s.isActive);
+      if (!serverConfig) {
+        results.push('"' + namespace + '" not found or disabled.');
+        anyError = true;
+        continue;
+      }
+
+      let lastError = "";
+      let activated = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const connection = await connectToUpstream(
+            serverConfig,
+            this.onUpstreamDisconnect,
+            this.onUpstreamListChanged,
+          );
+          this.connections.set(namespace, connection);
+          this.idleCallCounts.set(namespace, 0);
+          this.toolCache.set(
+            namespace,
+            connection.tools.map((t) => ({ name: t.name, description: t.description })),
+          );
+          anyChanged = true;
+          activated = true;
+
+          const toolNames = connection.tools.map((t) => t.namespacedName).join(", ");
+          results.push('Activated "' + namespace + '" — ' + connection.tools.length + " tools: " + toolNames);
+          break;
+        } catch (err: any) {
+          lastError = err.message;
+          if (attempt === 0) {
+            log("warn", "Activation attempt failed, retrying", { namespace, error: err.message });
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      if (!activated) {
+        log("error", "Failed to activate upstream", { namespace, error: lastError });
+        results.push('Failed to activate "' + namespace + '": ' + lastError);
+        anyError = true;
+      }
     }
 
-    // Find in config
-    const serverConfig = this.config?.servers.find((s) => s.namespace === namespace && s.isActive);
-    if (!serverConfig) {
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              'Server "' + namespace + '" not found or disabled. Use mcp_connect_discover to see available servers.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    try {
-      const connection = await connectToUpstream(serverConfig, (ns) => this.handleUpstreamDisconnect(ns));
-      this.connections.set(namespace, connection);
-      this.idleCallCounts.set(namespace, 0);
+    if (anyChanged) {
       this.rebuildRoutes();
       await this.notifyAllListsChanged();
-
-      const toolNames = connection.tools.map((t) => t.namespacedName).join(", ");
-      return {
-        content: [
-          {
-            type: "text",
-            text: 'Activated "' + namespace + '" — ' + connection.tools.length + " tools available: " + toolNames,
-          },
-        ],
-      };
-    } catch (err: any) {
-      log("error", "Failed to activate upstream", { namespace, error: err.message });
-      return {
-        content: [{ type: "text", text: 'Failed to activate "' + namespace + '": ' + err.message }],
-        isError: true,
-      };
     }
+
+    return {
+      content: [{ type: "text", text: results.join("\n") }],
+      isError: anyError && !anyChanged ? true : undefined,
+    };
   }
 
   private async handleDeactivate(
-    namespace: string,
+    namespaces: string[],
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
-    if (!namespace) {
+    if (namespaces.length === 0) {
       return {
         content: [{ type: "text", text: "server namespace is required." }],
         isError: true,
       };
     }
 
-    const connection = this.connections.get(namespace);
-    if (!connection) {
-      return {
-        content: [{ type: "text", text: 'Server "' + namespace + '" is not active.' }],
-        isError: true,
-      };
+    const results: string[] = [];
+    let anyChanged = false;
+
+    for (const namespace of namespaces) {
+      const connection = this.connections.get(namespace);
+      if (!connection) {
+        results.push('"' + namespace + '" is not active.');
+        continue;
+      }
+
+      await disconnectFromUpstream(connection);
+      this.connections.delete(namespace);
+      this.idleCallCounts.delete(namespace);
+      anyChanged = true;
+      results.push('Deactivated "' + namespace + '". Tools removed.');
     }
 
-    await disconnectFromUpstream(connection);
-    this.connections.delete(namespace);
-    this.idleCallCounts.delete(namespace);
-    this.rebuildRoutes();
-    await this.notifyAllListsChanged();
+    if (anyChanged) {
+      this.rebuildRoutes();
+      await this.notifyAllListsChanged();
+    }
 
     return {
-      content: [{ type: "text", text: 'Deactivated "' + namespace + '". Tools removed.' }],
+      content: [{ type: "text", text: results.join("\n") }],
+      isError: !anyChanged ? true : undefined,
     };
   }
 
@@ -437,9 +522,20 @@ export class ConnectServer {
   private async fetchAndApplyConfig(): Promise<void> {
     const newConfig = await fetchConfig(this.apiUrl, this.token);
 
-    if (newConfig.configVersion === this.configVersion) {
+    if (newConfig.configVersion && newConfig.configVersion === this.configVersion) {
       return; // No changes
     }
+
+    // Deduplicate by namespace — keep first occurrence
+    const seen = new Set<string>();
+    newConfig.servers = newConfig.servers.filter((s) => {
+      if (seen.has(s.namespace)) {
+        log("warn", "Duplicate namespace in config, skipping", { namespace: s.namespace });
+        return false;
+      }
+      seen.add(s.namespace);
+      return true;
+    });
 
     await this.reconcileConfig(newConfig);
     this.config = newConfig;
@@ -447,12 +543,12 @@ export class ConnectServer {
   }
 
   private async reconcileConfig(newConfig: ConnectConfig): Promise<void> {
-    const newNamespaces = new Set(newConfig.servers.map((s) => s.namespace));
+    const newServersByNs = new Map(newConfig.servers.map((s) => [s.namespace, s]));
     let changed = false;
 
     // Deactivate servers that were removed from config or disabled
     for (const [namespace, connection] of this.connections) {
-      const newServerConfig = newConfig.servers.find((s) => s.namespace === namespace);
+      const newServerConfig = newServersByNs.get(namespace);
 
       if (!newServerConfig || !newServerConfig.isActive) {
         log("info", "Server removed or disabled in config, deactivating", { namespace });
@@ -469,7 +565,7 @@ export class ConnectServer {
         oldConfig.command !== newServerConfig.command ||
         JSON.stringify(oldConfig.args) !== JSON.stringify(newServerConfig.args) ||
         oldConfig.url !== newServerConfig.url ||
-        JSON.stringify(oldConfig.env) !== JSON.stringify(newServerConfig.env)
+        !envEqual(oldConfig.env, newServerConfig.env)
       ) {
         log("info", "Server config changed, deactivating stale connection", { namespace });
         await disconnectFromUpstream(connection);
@@ -486,18 +582,17 @@ export class ConnectServer {
   }
 
   private startPolling(): void {
-    this.pollTimer = setInterval(async () => {
+    const poll = async () => {
       try {
         await this.fetchAndApplyConfig();
       } catch (err: any) {
         log("warn", "Config poll failed", { error: err.message });
       }
-    }, POLL_INTERVAL);
-
-    // Don't keep the process alive just for polling
-    if (this.pollTimer.unref) {
-      this.pollTimer.unref();
-    }
+      this.pollTimer = setTimeout(poll, POLL_INTERVAL);
+      if (this.pollTimer.unref) this.pollTimer.unref();
+    };
+    this.pollTimer = setTimeout(poll, POLL_INTERVAL);
+    if (this.pollTimer.unref) this.pollTimer.unref();
   }
 
   private async handleImport(
@@ -523,22 +618,21 @@ export class ConnectServer {
     }
 
     try {
-      const resolved = filepath.startsWith("~/") ? resolve(homedir(), filepath.slice(2)) : resolve(filepath);
+      const resolved =
+        filepath.startsWith("~/") || filepath.startsWith("~\\")
+          ? resolve(homedir(), filepath.slice(2))
+          : resolve(filepath);
       const raw = await readFile(resolved, "utf-8");
       const parsed = JSON.parse(raw);
 
       // Only parse if file has mcpServers key
-      if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") {
+      if (!parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)) {
         return {
           content: [{ type: "text", text: "No mcpServers object found in " + resolved }],
           isError: true,
         };
       }
       const mcpServers: Record<string, any> = parsed.mcpServers;
-
-      if (typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
-        return { content: [{ type: "text", text: "No mcpServers object found in " + resolved }], isError: true };
-      }
 
       // Note: env vars are NOT sent to the cloud for security — users must set them in the dashboard
       const servers: Array<{
@@ -568,10 +662,11 @@ export class ConnectServer {
           type: (value as any).url ? "remote" : "local",
         };
 
-        if ((value as any).command) entry.command = (value as any).command;
-        if ((value as any).args) entry.args = (value as any).args;
+        if ((value as any).command && typeof (value as any).command === "string")
+          entry.command = (value as any).command;
+        if (Array.isArray((value as any).args)) entry.args = (value as any).args;
         // env vars deliberately NOT sent — set them in the mcp.hosting dashboard
-        if ((value as any).url) entry.url = (value as any).url;
+        if ((value as any).url && typeof (value as any).url === "string") entry.url = (value as any).url;
 
         servers.push(entry);
       }
@@ -592,7 +687,12 @@ export class ConnectServer {
         bodyTimeout: 15_000,
       });
 
-      const body = (await res.body.json()) as any;
+      let body: any;
+      try {
+        body = await res.body.json();
+      } catch {
+        body = {};
+      }
 
       if (res.statusCode >= 400) {
         return {
@@ -604,6 +704,7 @@ export class ConnectServer {
       // Refresh config to pick up imported servers
       await this.fetchAndApplyConfig().catch(() => {});
 
+      const namespaceList = servers.map((s) => s.namespace).join(", ");
       return {
         content: [
           {
@@ -611,11 +712,13 @@ export class ConnectServer {
             text:
               "Imported " +
               (body.imported || 0) +
-              " servers" +
+              " servers (" +
+              namespaceList +
+              ")" +
               (body.skipped ? ", " + body.skipped + " skipped (already exist)" : "") +
               " from " +
               resolved +
-              ". Note: environment variables (API keys, tokens) were NOT imported for security — set them at mcp.hosting. Use mcp_connect_discover to see imported servers.",
+              ".\n\nNote: environment variables (API keys, tokens) were NOT imported for security — set them at mcp.hosting.\nUse mcp_connect_discover to see imported servers.",
           },
         ],
       };
@@ -635,10 +738,14 @@ export class ConnectServer {
       const h = conn.health;
       const avgLatency = h.totalCalls > 0 ? Math.round(h.totalLatencyMs / h.totalCalls) : 0;
       const errorRate = h.totalCalls > 0 ? Math.round((h.errorCount / h.totalCalls) * 100) : 0;
+      const idleCount = this.idleCallCounts.get(namespace) ?? 0;
+      const toolNames = conn.tools.map((t) => t.name).join(", ");
 
-      lines.push("  " + namespace + " [" + conn.status + "]");
+      lines.push("  " + namespace + " [" + conn.status + "] (" + conn.config.type + ")");
+      lines.push("    tools: " + conn.tools.length + " — " + toolNames);
       lines.push("    calls: " + h.totalCalls + ", errors: " + h.errorCount + " (" + errorRate + "%)");
       lines.push("    avg latency: " + avgLatency + "ms");
+      lines.push("    idle: " + idleCount + "/" + ConnectServer.IDLE_CALL_THRESHOLD + " until auto-deactivate");
       if (h.lastErrorMessage) {
         lines.push("    last error: " + h.lastErrorMessage + " at " + h.lastErrorAt);
       }
@@ -651,7 +758,7 @@ export class ConnectServer {
     log("info", "Shutting down mcp-connect");
 
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
 

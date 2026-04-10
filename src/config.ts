@@ -16,10 +16,12 @@ export async function fetchConfig(apiUrl: string, token: string): Promise<Connec
   });
 
   if (res.statusCode === 401) {
+    await res.body.text().catch(() => {});
     throw new ConfigError("Invalid MCP_HOSTING_TOKEN — check your token at mcp.hosting", true);
   }
 
   if (res.statusCode === 403) {
+    await res.body.text().catch(() => {});
     throw new ConfigError("Access denied — your token may have expired", true);
   }
 
@@ -33,6 +35,16 @@ export async function fetchConfig(apiUrl: string, token: string): Promise<Connec
   if (!data.servers || !Array.isArray(data.servers)) {
     throw new ConfigError("Invalid config response from server", false);
   }
+
+  // Filter out servers with invalid namespaces
+  const NAMESPACE_RE = /^[a-z][a-z0-9_]{0,29}$/;
+  data.servers = data.servers.filter((s) => {
+    if (!s.namespace || !NAMESPACE_RE.test(s.namespace)) {
+      log("warn", "Skipping server with invalid namespace", { namespace: s.namespace, name: s.name });
+      return false;
+    }
+    return true;
+  });
 
   log("info", "Config loaded", { serverCount: data.servers.length, version: data.configVersion });
 

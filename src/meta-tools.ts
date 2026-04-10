@@ -24,16 +24,20 @@ export const META_TOOLS = {
   activate: {
     name: "mcp_connect_activate",
     description:
-      'Activate an MCP server by namespace to load its tools. Each server adds tools to context, so only activate what you need right now. Good practice: deactivate servers you are done with before activating new ones. Tools are prefixed by namespace (e.g., "gh_create_issue").',
+      'Activate one or more MCP servers by namespace to load their tools. Each server adds tools to context, so only activate what you need right now. Good practice: deactivate servers you are done with before activating new ones. Tools are prefixed by namespace (e.g., "gh_create_issue"). Pass "server" for one or "servers" for multiple.',
     inputSchema: {
       type: "object" as const,
       properties: {
         server: {
           type: "string",
-          description: 'The namespace of the server to activate (e.g., "gh", "slack", "stripe")',
+          description: 'Single server namespace to activate (e.g., "gh")',
+        },
+        servers: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Multiple server namespaces to activate at once (e.g., ["gh", "slack"])',
         },
       },
-      required: ["server"],
     },
     annotations: {
       title: "Activate MCP Server",
@@ -46,7 +50,7 @@ export const META_TOOLS = {
   deactivate: {
     name: "mcp_connect_deactivate",
     description:
-      "Deactivate an MCP server to remove its tools and free context. Always deactivate servers you are finished with. Servers idle for 10+ tool calls to other servers are auto-deactivated.",
+      'Deactivate one or more MCP servers to remove their tools and free context. Always deactivate servers you are finished with. Servers idle for 10+ tool calls to other servers are auto-deactivated. Pass "server" for one or "servers" for multiple.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -54,8 +58,12 @@ export const META_TOOLS = {
           type: "string",
           description: "The namespace of the server to deactivate",
         },
+        servers: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Multiple server namespaces to deactivate at once (e.g., ["gh", "slack"])',
+        },
       },
-      required: ["server"],
     },
     annotations: {
       title: "Deactivate MCP Server",

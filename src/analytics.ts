@@ -4,7 +4,7 @@ import { log } from "./logger.js";
 export interface ConnectAnalyticsEvent {
   namespace: string | null;
   toolName: string | null;
-  action: "discover" | "activate" | "deactivate" | "tool_call";
+  action: "discover" | "activate" | "deactivate" | "tool_call" | "import" | "health";
   latencyMs: number | null;
   success: boolean;
   error?: string;
@@ -24,7 +24,7 @@ export function recordConnectEvent(event: Omit<ConnectAnalyticsEvent, "timestamp
   if (buffer.length >= MAX_BUFFER) return;
   buffer.push({ ...event, timestamp: new Date().toISOString() });
   if (buffer.length >= FLUSH_SIZE) {
-    flush();
+    flush().catch(() => {});
   }
 }
 
@@ -46,7 +46,7 @@ async function flush(): Promise<void> {
     if (res.statusCode >= 400) {
       // Re-insert at front for retry (up to buffer limit)
       const room = MAX_BUFFER - buffer.length;
-      if (room > 0) buffer.unshift(...events.slice(0, room));
+      if (room > 0) buffer.push(...events.slice(0, room));
       log("warn", "Analytics flush failed", { status: res.statusCode });
     }
     // Drain response body
@@ -54,7 +54,7 @@ async function flush(): Promise<void> {
   } catch (err: any) {
     // Re-insert for retry
     const room = MAX_BUFFER - buffer.length;
-    if (room > 0) buffer.unshift(...events.slice(0, room));
+    if (room > 0) buffer.push(...events.slice(0, room));
     log("warn", "Analytics flush error", { error: err.message });
   }
 }

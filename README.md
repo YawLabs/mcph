@@ -125,6 +125,15 @@ Available MCP servers:
 Activated "gh" — 24 tools available: gh_create_issue, gh_list_prs, ...
 ```
 
+You can also activate multiple servers at once:
+
+```
+> Activate GitHub and Slack
+
+Activated "gh" — 24 tools available: gh_create_issue, gh_list_prs, ...
+Activated "slack" — 8 tools available: slack_send_message, slack_list_channels, ...
+```
+
 The tool list updates automatically via `tools/list_changed`. Your client will see the new tools immediately.
 
 ### 3. Use the tools
@@ -157,6 +166,9 @@ mcp-connect polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config
 |----------|----------|-------------|
 | `MCP_HOSTING_TOKEN` | Yes | Your personal access token from mcp.hosting |
 | `MCP_HOSTING_URL` | No | API URL (default: `https://mcp.hosting`) |
+| `LOG_LEVEL` | No | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
+| `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
+| `MCP_CONNECT_IDLE_THRESHOLD` | No | Tool calls to other servers before auto-deactivating an idle server (default: `10`) |
 
 ## Requirements
 

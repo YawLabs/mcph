@@ -28,7 +28,12 @@ if (!token) {
 const server = new ConnectServer(apiUrl, token);
 
 // Graceful shutdown
+let shuttingDown = false;
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  if (forceExit.unref) forceExit.unref();
   await server.shutdown();
   process.exit(0);
 };

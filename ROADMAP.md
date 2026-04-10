@@ -22,8 +22,8 @@
 - [ ] **Routing analytics upload** — Send tool call patterns, activation/deactivation events, and error rates to mcp.hosting dashboard
 - [ ] **Error tracking in discover()** — Show server health in discover results ("npm: last 3 calls failed, might be down")
 - [ ] **Concurrent server cap** — Limit max active servers (5 for free, unlimited for paid) as both a business lever and context protection
-- [ ] **Resource proxying** — Proxy MCP resources from upstream servers, not just tools
-- [ ] **Prompt proxying** — Proxy MCP prompts from upstream servers
+- [x] **Resource proxying** — Proxy MCP resources from upstream servers, not just tools
+- [x] **Prompt proxying** — Proxy MCP prompts from upstream servers
 - [ ] **Per-tool activation** — Activate specific tools from a server instead of all tools (category-based subsets)
 - [ ] **Marketplace integration** — Browse and one-click add servers from the mcp.hosting marketplace directly through discover()
 - [ ] **Multi-device config sync** — Same token, same config, across all machines (already works implicitly, but needs marketing)

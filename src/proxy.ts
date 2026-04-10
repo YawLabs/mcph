@@ -215,9 +215,9 @@ export async function routeToolCall(
           text:
             'Server "' +
             route.namespace +
-            '" is no longer connected. Use mcp_connect_activate("' +
+            '" is no longer connected. Use mcp_connect_activate with server "' +
             route.namespace +
-            '") to reconnect.',
+            '" to reconnect.',
         },
       ],
       isError: true,
