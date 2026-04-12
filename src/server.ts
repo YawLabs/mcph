@@ -88,7 +88,7 @@ export class ConnectServer {
     private token: string,
   ) {
     this.server = new Server(
-      { name: "mcp-connect", version: typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0" },
+      { name: "mcph", version: typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0" },
       {
         capabilities: {
           tools: { listChanged: true },
@@ -173,7 +173,7 @@ export class ConnectServer {
 
     this.startPolling();
 
-    log("info", "mcp-connect started", {
+    log("info", "mcph started", {
       apiUrl: this.apiUrl,
       servers: this.config?.servers.length ?? 0,
     });
@@ -667,7 +667,7 @@ export class ConnectServer {
       for (const [key, value] of Object.entries(mcpServers)) {
         if (!value || typeof value !== "object") continue;
         // Skip ourselves
-        if (key === "mcp-connect") continue;
+        if (key === "mcph" || key === "mcp.hosting" || key === "mcp-connect") continue;
 
         const namespace = key
           .toLowerCase()
@@ -779,7 +779,7 @@ export class ConnectServer {
   }
 
   async shutdown(): Promise<void> {
-    log("info", "Shutting down mcp-connect");
+    log("info", "Shutting down mcph");
 
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -795,6 +795,6 @@ export class ConnectServer {
 
     await this.server.close();
 
-    log("info", "mcp-connect shutdown complete");
+    log("info", "mcph shutdown complete");
   }
 }

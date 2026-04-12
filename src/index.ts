@@ -2,21 +2,21 @@ import { ConfigError } from "./config.js";
 import { log } from "./logger.js";
 import { ConnectServer } from "./server.js";
 
-const token = process.env.MCP_HOSTING_TOKEN;
-const apiUrl = process.env.MCP_HOSTING_URL ?? "https://mcp.hosting";
+const token = process.env.MCPH_TOKEN;
+const apiUrl = process.env.MCPH_URL ?? "https://mcp.hosting";
 
 if (!token) {
   process.stderr.write(
-    "\n  mcp-connect: MCP_HOSTING_TOKEN is required.\n\n" +
+    "\n  mcph: MCPH_TOKEN is required.\n\n" +
       "  1. Create a token at https://mcp.hosting → Settings → API Tokens\n" +
       "  2. Add it to your MCP client config:\n\n" +
       "     {\n" +
       '       "mcpServers": {\n' +
-      '         "mcp-connect": {\n' +
+      '         "mcp.hosting": {\n' +
       '           "command": "npx",\n' +
-      '           "args": ["@yawlabs/mcp-connect"],\n' +
+      '           "args": ["@yawlabs/mcph"],\n' +
       '           "env": {\n' +
-      '             "MCP_HOSTING_TOKEN": "mcp_pat_your_token_here"\n' +
+      '             "MCPH_TOKEN": "mcph_pat_your_token_here"\n' +
       "           }\n" +
       "         }\n" +
       "       }\n" +
@@ -27,7 +27,6 @@ if (!token) {
 
 const server = new ConnectServer(apiUrl, token);
 
-// Graceful shutdown
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
@@ -43,7 +42,7 @@ process.on("SIGINT", shutdown);
 
 server.start().catch((err) => {
   if (err instanceof ConfigError && err.fatal) {
-    process.stderr.write(`\n  mcp-connect: ${err.message}\n\n`);
+    process.stderr.write(`\n  mcph: ${err.message}\n\n`);
     process.exit(1);
   }
 

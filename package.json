@@ -1,12 +1,12 @@
 {
-  "name": "@yawlabs/mcp-connect",
-  "version": "0.3.1",
-  "description": "MCP orchestrator — one install, all your MCP servers, managed from the cloud",
+  "name": "@yawlabs/mcph",
+  "version": "0.4.0",
+  "description": "mcp.hosting — one install, all your MCP servers, managed from the cloud",
   "license": "MIT",
   "author": "Yaw Labs <contact@yaw.sh> (https://yaw.sh)",
   "type": "module",
   "bin": {
-    "mcp-connect": "./dist/index.js"
+    "mcph": "./dist/index.js"
   },
   "files": [
     "dist",
@@ -45,15 +45,15 @@
     "orchestrator",
     "mcp-server",
     "ai",
-    "mcp-connect",
+    "mcph",
     "mcp-hosting"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YawLabs/mcp-connect.git"
+    "url": "git+https://github.com/YawLabs/mcph.git"
   },
   "bugs": {
-    "url": "https://github.com/YawLabs/mcp-connect/issues"
+    "url": "https://github.com/YawLabs/mcph/issues"
   },
   "homepage": "https://mcp.hosting"
 }

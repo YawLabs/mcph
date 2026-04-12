@@ -17,7 +17,7 @@ export async function fetchConfig(apiUrl: string, token: string): Promise<Connec
 
   if (res.statusCode === 401) {
     await res.body.text().catch(() => {});
-    throw new ConfigError("Invalid MCP_HOSTING_TOKEN — check your token at mcp.hosting", true);
+    throw new ConfigError("Invalid MCPH_TOKEN — check your token at mcp.hosting", true);
   }
 
   if (res.statusCode === 403) {

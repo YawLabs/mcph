@@ -31,7 +31,7 @@ export async function connectToUpstream(
   onListChanged?: (namespace: string) => void,
 ): Promise<UpstreamConnection> {
   const client = new Client(
-    { name: "mcp-connect", version: typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0" },
+    { name: "mcph", version: typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0" },
     { capabilities: {} },
   );
 
@@ -42,7 +42,7 @@ export async function connectToUpstream(
       throw new Error("command is required for local servers");
     }
 
-    const { MCP_HOSTING_TOKEN: _excluded, ...parentEnv } = process.env;
+    const { MCPH_TOKEN: _excluded, ...parentEnv } = process.env;
     transport = new StdioClientTransport({
       command: config.command,
       args: config.args ?? [],
