@@ -155,7 +155,7 @@ fi
 # =============================================================================
 step 5 "Publish to npm"
 
-PUBLISHED_VERSION=$(npm view @yawlabs/mcp-connect version 2>/dev/null || echo "")
+PUBLISHED_VERSION=$(npm view @yawlabs/mcph version 2>/dev/null || echo "")
 
 if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
   info "v${VERSION} already published on npm — skipping"
@@ -165,7 +165,7 @@ else
   else
     npm publish --access public
   fi
-  info "Published @yawlabs/mcp-connect@${VERSION} to npm"
+  info "Published @yawlabs/mcph@${VERSION} to npm"
 fi
 
 # =============================================================================
@@ -196,9 +196,9 @@ step 7 "Verify"
 
 sleep 3
 
-NPM_VERSION=$(npm view @yawlabs/mcp-connect version 2>/dev/null || echo "")
+NPM_VERSION=$(npm view @yawlabs/mcph version 2>/dev/null || echo "")
 if [ "$NPM_VERSION" = "$VERSION" ]; then
-  info "npm: @yawlabs/mcp-connect@${NPM_VERSION}"
+  info "npm: @yawlabs/mcph@${NPM_VERSION}"
 else
   warn "npm shows ${NPM_VERSION:-nothing} (expected $VERSION — may still be propagating)"
 fi
@@ -222,6 +222,6 @@ fi
 echo ""
 echo -e "${GREEN}  v${VERSION} released successfully!${NC}"
 echo ""
-echo -e "  npm: https://www.npmjs.com/package/@yawlabs/mcp-connect"
-echo -e "  git: https://github.com/YawLabs/mcp-connect/releases/tag/v${VERSION}"
+echo -e "  npm: https://www.npmjs.com/package/@yawlabs/mcph"
+echo -e "  git: https://github.com/YawLabs/mcph/releases/tag/v${VERSION}"
 echo ""

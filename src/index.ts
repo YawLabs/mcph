@@ -16,7 +16,7 @@ if (!token) {
       '           "command": "npx",\n' +
       '           "args": ["@yawlabs/mcph"],\n' +
       '           "env": {\n' +
-      '             "MCPH_TOKEN": "mcph_pat_your_token_here"\n' +
+      '             "MCPH_TOKEN": "mcp_pat_your_token_here"\n' +
       "           }\n" +
       "         }\n" +
       "       }\n" +

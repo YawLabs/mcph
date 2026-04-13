@@ -1,4 +1,4 @@
-# mcp-connect Roadmap
+# mcph Roadmap
 
 ## Phase 1 — v0.1 (Complete)
 
@@ -34,4 +34,4 @@
 - [ ] **Pre-built orchestrator configs** — Curated bundles ("The DevOps Stack: GitHub + AWS + PagerDuty", "The Marketing Stack: HubSpot + Slack + Analytics")
 - [ ] **Compliance-aware routing** — Only activate servers that pass a minimum compliance grade
 - [ ] **Tool deduplication** — Detect overlapping tools across servers and surface the best one
-- [ ] **Conversation-aware routing** — If mcp-connect could receive conversation context (future MCP spec), route automatically based on what the user is talking about
+- [ ] **Conversation-aware routing** — If mcph could receive conversation context (future MCP spec), route automatically based on what the user is talking about

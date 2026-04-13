@@ -1,8 +1,8 @@
-# @yawlabs/mcp-connect
+# @yawlabs/mcph
 
 One install. All your MCP servers. Managed from the cloud.
 
-mcp-connect is an MCP server that orchestrates all your other MCP servers. Configure your servers once on [mcp.hosting](https://mcp.hosting), install mcp-connect in your client, and never hand-edit MCP JSON configs again.
+mcph is an MCP server that orchestrates all your other MCP servers. Configure your servers once on [mcp.hosting](https://mcp.hosting), install mcph in your client, and never hand-edit MCP JSON configs again.
 
 ## How it works
 
@@ -11,14 +11,14 @@ Your MCP client (Claude Code, Cursor, etc.)
     |
     |  single stdio connection
     v
-@yawlabs/mcp-connect
+@yawlabs/mcph
     |         |         |
     v         v         v
   GitHub    Slack    Stripe     ← your MCP servers (local or remote)
 ```
 
 1. You add servers on [mcp.hosting](https://mcp.hosting) (name, command, args, env vars)
-2. mcp-connect pulls your config on startup
+2. mcph pulls your config on startup
 3. You use 3 meta-tools to control which servers are active:
    - **`mcp_connect_discover`** — list all configured servers
    - **`mcp_connect_activate`** — connect a server and load its tools
@@ -33,11 +33,11 @@ Only activated servers load tools into context. This keeps your context window c
 ```json
 {
   "mcpServers": {
-    "mcp-connect": {
+    "mcph": {
       "command": "npx",
-      "args": ["-y", "@yawlabs/mcp-connect"],
+      "args": ["-y", "@yawlabs/mcph"],
       "env": {
-        "MCP_HOSTING_TOKEN": "mcp_pat_your_token_here"
+        "MCPH_TOKEN": "mcp_pat_your_token_here"
       }
     }
   }
@@ -50,11 +50,11 @@ Add to your MCP settings:
 
 ```json
 {
-  "mcp-connect": {
+  "mcph": {
     "command": "npx",
-    "args": ["-y", "@yawlabs/mcp-connect"],
+    "args": ["-y", "@yawlabs/mcph"],
     "env": {
-      "MCP_HOSTING_TOKEN": "mcp_pat_your_token_here"
+      "MCPH_TOKEN": "mcp_pat_your_token_here"
     }
   }
 }
@@ -67,11 +67,11 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "mcp-connect": {
+    "mcph": {
       "command": "npx",
-      "args": ["-y", "@yawlabs/mcp-connect"],
+      "args": ["-y", "@yawlabs/mcph"],
       "env": {
-        "MCP_HOSTING_TOKEN": "mcp_pat_your_token_here"
+        "MCPH_TOKEN": "mcp_pat_your_token_here"
       }
     }
   }
@@ -158,14 +158,14 @@ This frees up context for other tools.
 
 ## Config sync
 
-mcp-connect polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config changes. When you add, remove, or modify a server on the dashboard, mcp-connect picks it up automatically — no restart needed.
+mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config changes. When you add, remove, or modify a server on the dashboard, mcph picks it up automatically — no restart needed.
 
 ## Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MCP_HOSTING_TOKEN` | Yes | Your personal access token from mcp.hosting |
-| `MCP_HOSTING_URL` | No | API URL (default: `https://mcp.hosting`) |
+| `MCPH_TOKEN` | Yes | Your personal access token from mcp.hosting |
+| `MCPH_URL` | No | API URL (default: `https://mcp.hosting`) |
 | `LOG_LEVEL` | No | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
 | `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
 | `MCP_CONNECT_IDLE_THRESHOLD` | No | Tool calls to other servers before auto-deactivating an idle server (default: `10`) |
@@ -175,12 +175,8 @@ mcp-connect polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config
 - Node.js 18+
 - An [mcp.hosting](https://mcp.hosting) account
 
-## License
-
-MIT
-
 ## Links
 
 - [mcp.hosting](https://mcp.hosting) — Dashboard and server management
 - [@yawlabs/mcp-compliance](https://www.npmjs.com/package/@yawlabs/mcp-compliance) — Test your MCP servers for spec compliance
-- [GitHub](https://github.com/YawLabs/mcp-connect) — Source code and issues
+- [GitHub](https://github.com/YawLabs/mcph) — Source code and issues
