@@ -31,6 +31,7 @@ import {
   routeToolCall,
 } from "./proxy.js";
 import { type RankableServer, rankServers, scoreRelevance } from "./relevance.js";
+import { initRerank, rerank } from "./rerank.js";
 import { initToolReport, reportTools } from "./tool-report.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { ActivationError, connectToUpstream, disconnectFromUpstream } from "./upstream.js";
@@ -193,6 +194,7 @@ export class ConnectServer {
 
     initAnalytics(this.apiUrl, this.token);
     initToolReport(this.apiUrl, this.token);
+    initRerank(this.apiUrl, this.token);
 
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
@@ -364,6 +366,64 @@ export class ConnectServer {
       description: server.description,
       tools: liveTools ?? sessionCache ?? persistedCache ?? [],
     };
+  }
+
+  // BM25 first-stage cap — wider than the budget so the semantic rerank
+  // has room to promote a server that BM25 missed on lexical grounds.
+  // 25 is comfortably under the /api/connect/rerank candidate cap (50)
+  // while leaving real reordering room.
+  private static readonly BM25_TOP_K = 25;
+
+  // Two-stage ranking: local BM25 to shortlist candidates, then a call
+  // to /api/connect/rerank for semantic reordering. When rerank is
+  // unavailable (no Voyage key on the backend, network hiccup, timeout,
+  // empty response), fall back silently to the BM25 order — rerank is
+  // an optimization, not a requirement.
+  private async twoStageRank(
+    context: string,
+    servers: UpstreamServerConfig[],
+  ): Promise<Array<{ namespace: string; score: number }>> {
+    const bm25Input = servers.map((s) => this.rankableFor(s));
+    const bm25 = rankServers(context, bm25Input);
+    if (bm25.length === 0) return [];
+
+    const shortlist = bm25.slice(0, ConnectServer.BM25_TOP_K);
+    const idByNamespace = new Map(servers.map((s) => [s.namespace, s.id]));
+    const candidateIds = shortlist
+      .map((r) => idByNamespace.get(r.namespace))
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    if (candidateIds.length === 0) return shortlist;
+
+    const rerankResults = await rerank(context, candidateIds);
+    if (!rerankResults) return shortlist;
+
+    // Map id → namespace so we can reorder the BM25 shortlist by the
+    // rerank scores. Any BM25 candidate missing from rerank output
+    // (e.g., not yet embedded) falls back to its BM25 score but sorts
+    // after reranked winners.
+    const namespaceById = new Map(servers.map((s) => [s.id, s.namespace]));
+    const rerankScoreByNamespace = new Map<string, number>();
+    for (const r of rerankResults) {
+      const ns = namespaceById.get(r.id);
+      if (ns) rerankScoreByNamespace.set(ns, r.score);
+    }
+
+    const reordered: Array<{ namespace: string; score: number; hasRerank: boolean }> = [];
+    for (const item of shortlist) {
+      const s = rerankScoreByNamespace.get(item.namespace);
+      reordered.push({
+        namespace: item.namespace,
+        score: s ?? item.score,
+        hasRerank: s !== undefined,
+      });
+    }
+    reordered.sort((a, b) => {
+      // Reranked entries always sort above non-reranked (no mixing
+      // comparison between a cosine similarity and a BM25 score).
+      if (a.hasRerank !== b.hasRerank) return a.hasRerank ? -1 : 1;
+      return b.score - a.score;
+    });
+    return reordered.map((r) => ({ namespace: r.namespace, score: r.score }));
   }
 
   // Auto-warm confidence gate — applied to discover(context) so a single
@@ -646,10 +706,10 @@ export class ConnectServer {
       };
     }
 
-    const ranked = rankServers(
-      trimmed,
-      activeServers.map((s) => this.rankableFor(s)),
-    );
+    // Two-stage: local BM25 filters to a shortlist, /api/connect/rerank
+    // semantically reorders it via Voyage. Falls back to BM25 alone when
+    // rerank is off or times out, so dispatch is robust in every mode.
+    const ranked = await this.twoStageRank(trimmed, activeServers);
 
     if (ranked.length === 0) {
       return {
