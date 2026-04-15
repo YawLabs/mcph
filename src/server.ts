@@ -32,6 +32,8 @@ import {
 } from "./proxy.js";
 import { type RankableServer, rankServers, scoreRelevance } from "./relevance.js";
 import { initRerank, rerank } from "./rerank.js";
+import { initRuntimeDetect, reportRuntimes } from "./runtime-detect.js";
+import { initTestRunner, startTestRunner, stopTestRunner } from "./test-runner.js";
 import { initToolReport, reportTools } from "./tool-report.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { ActivationError, connectToUpstream, disconnectFromUpstream } from "./upstream.js";
@@ -195,6 +197,14 @@ export class ConnectServer {
     initAnalytics(this.apiUrl, this.token);
     initToolReport(this.apiUrl, this.token);
     initRerank(this.apiUrl, this.token);
+    initRuntimeDetect(this.apiUrl, this.token);
+    initTestRunner(this.apiUrl, this.token, () => this.config);
+    // Background runtime probe — fire-and-forget, the dashboard just
+    // ignores stale snapshots. Subsequent reports happen on each new
+    // mcph startup, which is sufficient for "what runtimes are
+    // installed" since it changes rarely.
+    reportRuntimes().catch(() => {});
+    startTestRunner();
 
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
@@ -1084,6 +1094,7 @@ export class ConnectServer {
       this.pollTimer = null;
     }
 
+    stopTestRunner();
     await shutdownAnalytics();
 
     // Disconnect all upstreams

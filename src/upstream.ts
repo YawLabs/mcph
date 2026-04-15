@@ -164,6 +164,14 @@ export async function connectToUpstream(
       }
     }
 
+    // Append a deep-link to the dashboard so the LLM can render a
+    // clickable "fix this here" pointer rather than a generic "edit
+    // your server config." The dashboard reads the #server-<id> hash
+    // on mount and scrolls to + highlights the matching card.
+    if (config.id) {
+      message = `${message} → Edit at https://mcp.hosting/dashboard/connect#server-${config.id}`;
+    }
+
     throw new ActivationError(message, category, trimmedStderr || undefined, err);
   }
 
