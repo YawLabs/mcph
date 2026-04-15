@@ -19,12 +19,17 @@ Your MCP client (Claude Code, Cursor, etc.)
 
 1. You add servers on [mcp.hosting](https://mcp.hosting) (name, command, args, env vars)
 2. mcph pulls your config on startup
-3. You use 3 meta-tools to control which servers are active:
-   - **`mcp_connect_discover`** — list all configured servers
-   - **`mcp_connect_activate`** — connect a server and load its tools
-   - **`mcp_connect_deactivate`** — disconnect and remove tools
+3. You use a handful of meta-tools to control which servers are active:
+   - **`mcp_connect_dispatch`** — describe a task in plain English; mcph picks the right server, activates it, and exposes its tools. The fast path when you know what you want.
+   - **`mcp_connect_discover`** — list all configured servers, optionally ranked by relevance to a context string. Auto-activates the top match when one server clearly wins.
+   - **`mcp_connect_activate`** — connect specific servers by namespace.
+   - **`mcp_connect_deactivate`** — disconnect and remove tools.
+   - **`mcp_connect_import`** — bulk-import servers from an existing client config (`claude_desktop_config.json`, `mcp.json`, etc.).
+   - **`mcp_connect_health`** — show call counts, error rates, and latency per active connection.
 
 Only activated servers load tools into context. This keeps your context window clean.
+
+Ranking is two-stage when the backend has a Voyage embeddings key configured: a local BM25 pass narrows to a shortlist, then a `/api/connect/rerank` call semantically reorders. With no key on the backend it gracefully degrades to BM25-only — `dispatch` and `discover(context)` keep working, just with slightly weaker ranking on ambiguous queries.
 
 ## Install
 
@@ -101,9 +106,24 @@ On [mcp.hosting](https://mcp.hosting), add each MCP server you want to orchestra
 
 ## Usage
 
-Once configured, your LLM will see three tools. Here's the typical flow:
+### Fast path — `dispatch`
 
-### 1. Discover servers
+When you know what you want to do, skip the discover/activate dance:
+
+```
+> Create a GitHub issue for the login bug
+
+[mcp_connect_dispatch is called with intent="create a GitHub issue for the login bug"]
+
+Dispatched "create a GitHub issue for the login bug" — activated top 1 of 1 matching server.
+gh (score 4.32): Activated "gh" — 24 tools: gh_create_issue, gh_list_prs, ...
+
+[gh_create_issue is then called, returns the new issue]
+```
+
+`dispatch` ranks every configured server, activates the top match, and immediately exposes its tools so the LLM can call them. Default budget is 1 (one server). For tasks that need multiple servers, pass `budget: 3` etc.
+
+### Manual control
 
 ```
 > What MCP servers do I have?
@@ -117,44 +137,29 @@ Available MCP servers:
 0 active, 0 tools loaded.
 ```
 
-### 2. Activate what you need
-
 ```
 > Activate my GitHub server
 
 Activated "gh" — 24 tools available: gh_create_issue, gh_list_prs, ...
 ```
 
-You can also activate multiple servers at once:
+You can activate multiple at once: `> Activate GitHub and Slack`. Tools are namespaced as `{namespace}_{original_tool_name}` to prevent collisions. The tool list updates automatically via `tools/list_changed`.
 
 ```
-> Activate GitHub and Slack
-
-Activated "gh" — 24 tools available: gh_create_issue, gh_list_prs, ...
-Activated "slack" — 8 tools available: slack_send_message, slack_list_channels, ...
-```
-
-The tool list updates automatically via `tools/list_changed`. Your client will see the new tools immediately.
-
-### 3. Use the tools
-
-```
-> List my open PRs
-
-[gh_list_prs is called, returns results]
-```
-
-Tools are namespaced: `{namespace}_{original_tool_name}`. This prevents collisions between servers.
-
-### 4. Deactivate when done
-
-```
-> Deactivate GitHub
+> Deactivate GitHub when you're done
 
 Deactivated "gh". Tools removed.
 ```
 
-This frees up context for other tools.
+Servers also auto-deactivate after 10 tool calls to other servers, so context stays clean even if you forget.
+
+### Test from the dashboard
+
+The `/dashboard/connect` page in mcp.hosting has a **Test** button per server that probes activation through your running mcph and shows pass/fail inline — no LLM round-trip needed. Useful when you've just added a server and want to confirm the token works without prompting your AI.
+
+### Errors come with deep-links
+
+When activation fails (missing token, runtime not on PATH, server crashes on init), mcph emits a message ending with `→ Edit at https://mcp.hosting/dashboard/connect#server-<id>`. Most LLMs render that as a clickable link, and the dashboard scrolls to and highlights the matching card so you find the right server in one click.
 
 ## Config sync
 
@@ -167,8 +172,16 @@ mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config change
 | `MCPH_TOKEN` | Yes | Your personal access token from mcp.hosting |
 | `MCPH_URL` | No | API URL (default: `https://mcp.hosting`) |
 | `LOG_LEVEL` | No | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
+| `MCPH_POLL_INTERVAL` | No | Config-poll interval in seconds. `0` disables polling (config fetched once at startup). Default: `60` |
+| `MCPH_AUTO_ACTIVATE` | No | When `discover` is called with a context string and one server clearly wins, auto-activate it. Set to `0` to disable. Default: enabled |
 | `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
 | `MCP_CONNECT_IDLE_THRESHOLD` | No | Tool calls to other servers before auto-deactivating an idle server (default: `10`) |
+
+## Runtime detection
+
+On startup, mcph probes your machine for `node`, `npx`, `python`, `uvx`, and `docker` and reports the snapshot to mcp.hosting. The dashboard uses this to warn before you add a catalog server whose runtime isn't installed (e.g., adding the Sentry server when Python isn't on your PATH). No prompt, no LLM round-trip — just a yellow banner on the Add Server form.
+
+The detection is best-effort: each probe has a 3-second timeout and missing runtimes are recorded as absent rather than blocking startup. mcph itself only requires Node.js — every other runtime is optional and only matters for servers that need it.
 
 ## Requirements
 
