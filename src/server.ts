@@ -16,6 +16,7 @@ import { initAnalytics, recordConnectEvent, shutdownAnalytics } from "./analytic
 import { ConfigError, fetchConfig } from "./config.js";
 import { detectMissingCredentials } from "./credentials.js";
 import { type ActivationFailure, healthFactor } from "./health-score.js";
+import { LearningStore } from "./learning.js";
 import { log } from "./logger.js";
 import { META_TOOLS, META_TOOL_NAMES } from "./meta-tools.js";
 import { type Profile, loadProfile, profileAllows } from "./profile.js";
@@ -118,6 +119,9 @@ export class ConnectServer {
   // Cleared on shutdown — persistence belongs in the mcp.hosting
   // dashboard, these are a "get me running now" shortcut.
   private elicitedEnv = new Map<string, Record<string, string>>();
+  // Session-scoped usage learning — nudges dispatch toward namespaces
+  // that have been genuinely useful this session. See learning.ts.
+  private readonly learning = new LearningStore();
 
   private static readonly IDLE_CALL_THRESHOLD = (() => {
     const env = process.env.MCP_CONNECT_IDLE_THRESHOLD;
@@ -920,7 +924,9 @@ export class ConnectServer {
       .map((r) => ({
         namespace: r.namespace,
         score:
-          r.score * healthFactor(this.connections.get(r.namespace)?.health, this.activationFailures.get(r.namespace)),
+          r.score *
+          healthFactor(this.connections.get(r.namespace)?.health, this.activationFailures.get(r.namespace)) *
+          this.learning.boostFactor(r.namespace),
       }))
       .sort((a, b) => b.score - a.score);
 
@@ -974,6 +980,12 @@ export class ConnectServer {
       results.push(`${winner.namespace} (score ${winner.score.toFixed(2)}): ${r.message}`);
       if (r.isChanged) anyChanged = true;
       if (!r.ok) anyError = true;
+      // Treat a successful activation as a positive dispatch signal.
+      // Actual tool-call success is tracked via trackUsageAndAutoDeactivate
+      // on the proxy path, so dispatch-success is the right granularity
+      // here — we're grading the routing decision, not the tool call.
+      this.learning.recordDispatch(winner.namespace);
+      if (r.ok) this.learning.recordSuccess(winner.namespace);
     }
     progress?.("Dispatch complete", winners.length, winners.length);
 
