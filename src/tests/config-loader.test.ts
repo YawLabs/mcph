@@ -23,8 +23,12 @@ afterEach(() => {
   rmSync(synthCwd, { recursive: true, force: true });
 });
 
+// Default to 0o600 — matches what `mcph install` writes, so test fixtures
+// don't trip the loose-perms warning on POSIX CI runners. Tests that
+// specifically need 644 chmodSync after this call.
 function writeJson(path: string, obj: unknown): void {
   writeFileSync(path, JSON.stringify(obj, null, 2));
+  if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
 describe("loadMcphConfig — defaults & env-only", () => {
