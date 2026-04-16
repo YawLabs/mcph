@@ -28,6 +28,9 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "undici": "^7.8.0"
   },
+  "overrides": {
+    "hono": "^4.12.14"
+  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.0.0",
