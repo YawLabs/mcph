@@ -14,6 +14,7 @@ import {
 import { request } from "undici";
 import { initAnalytics, recordConnectEvent, shutdownAnalytics } from "./analytics.js";
 import { ConfigError, fetchConfig } from "./config.js";
+import { detectMissingCredentials } from "./credentials.js";
 import { type ActivationFailure, healthFactor } from "./health-score.js";
 import { log } from "./logger.js";
 import { META_TOOLS, META_TOOL_NAMES } from "./meta-tools.js";
@@ -111,6 +112,11 @@ export class ConnectServer {
   // Short-term memory of activation failures; used by dispatch to
   // down-rank recently-flaky servers. Cleared on successful activation.
   private activationFailures = new Map<string, ActivationFailure>();
+  // Session-scoped credential overrides supplied by the user via MCP
+  // elicitation when a server's stderr indicated a missing env var.
+  // Cleared on shutdown — persistence belongs in the mcp.hosting
+  // dashboard, these are a "get me running now" shortcut.
+  private elicitedEnv = new Map<string, Record<string, string>>();
 
   private static readonly IDLE_CALL_THRESHOLD = (() => {
     const env = process.env.MCP_CONNECT_IDLE_THRESHOLD;
@@ -133,6 +139,10 @@ export class ConnectServer {
         },
       },
     );
+    // mcph itself does not handle elicitation or sampling requests; it
+    // originates them. The capability declaration for originated features
+    // is implicit — the client advertises whether IT supports receiving
+    // them, which we check via getClientCapabilities() before prompting.
     this.setupHandlers();
   }
 
@@ -655,13 +665,22 @@ export class ConnectServer {
       };
     }
 
+    // Merge any session-elicited env over the server's configured env.
+    // Elicited values only apply inside this mcph process lifetime.
+    const elicited = this.elicitedEnv.get(namespace);
+    const effectiveConfig = elicited ? { ...serverConfig, env: { ...serverConfig.env, ...elicited } } : serverConfig;
+
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         progress?.(
           attempt === 0 ? `Spawning "${namespace}" upstream…` : `Retrying "${namespace}" (attempt ${attempt + 1})…`,
         );
-        const connection = await connectToUpstream(serverConfig, this.onUpstreamDisconnect, this.onUpstreamListChanged);
+        const connection = await connectToUpstream(
+          effectiveConfig,
+          this.onUpstreamDisconnect,
+          this.onUpstreamListChanged,
+        );
         progress?.(`"${namespace}" loaded ${connection.tools.length} tools`);
         this.connections.set(namespace, connection);
         this.idleCallCounts.set(namespace, 0);
@@ -694,6 +713,15 @@ export class ConnectServer {
       }
     }
 
+    // Before giving up, see if the failure looks like a missing credential
+    // and the client supports elicitation. If both hold, ask the user for
+    // the missing values and retry exactly once — one round-trip max.
+    //
+    // Guarded by the haven't-just-tried-this-credential check: if elicited
+    // values are already present for every detected name, don't ask twice.
+    const elicitedRetry = await this.maybeElicitAndRetry(namespace, lastError, progress);
+    if (elicitedRetry) return elicitedRetry;
+
     log("error", "Failed to activate upstream", {
       namespace,
       error: lastError instanceof Error ? lastError.message : String(lastError),
@@ -714,6 +742,88 @@ export class ConnectServer {
         ? `Failed to activate "${namespace}": ${lastError.message}`
         : `Failed to activate "${namespace}": ${lastError instanceof Error ? lastError.message : String(lastError)}`;
     return { ok: false, isChanged: false, message };
+  }
+
+  // If the activation error names a missing credential (e.g. "GITHUB_TOKEN
+  // is required") AND the client supports elicitation, ask the user for
+  // the values inline and retry activation once. Returns the retry result
+  // on success, or null when we can't/shouldn't elicit. Single-round only —
+  // we don't want to pester the user with a loop on every retry failure.
+  private async maybeElicitAndRetry(
+    namespace: string,
+    lastError: unknown,
+    progress?: ProgressReporter,
+  ): Promise<{ ok: boolean; message: string; isChanged: boolean; serverId?: string } | null> {
+    const stderr = lastError instanceof ActivationError ? lastError.stderrTail : undefined;
+    const errMessage = lastError instanceof Error ? lastError.message : String(lastError);
+    const haystack = [stderr, errMessage].filter(Boolean).join("\n");
+    const missing = detectMissingCredentials(haystack);
+    if (missing.length === 0) return null;
+
+    // Skip if we've already elicited these exact values — that means we
+    // already tried with the user's input and it still failed, so more
+    // prompting won't help.
+    const alreadyElicited = this.elicitedEnv.get(namespace);
+    if (alreadyElicited && missing.every((k) => k in alreadyElicited)) return null;
+
+    const caps = this.server.getClientCapabilities();
+    if (!caps?.elicitation) {
+      log("info", "Detected missing credentials but client does not support elicitation", {
+        namespace,
+        missing,
+      });
+      return null;
+    }
+
+    // Build an object-schema elicitation with one string field per missing
+    // credential. Descriptions are minimal on purpose — we don't know the
+    // semantic purpose of each env var.
+    const properties: Record<string, { type: "string"; title: string; description: string }> = {};
+    for (const key of missing) {
+      properties[key] = {
+        type: "string",
+        title: key,
+        description: `The value for ${key} required by "${namespace}". Stored only for this mcph session.`,
+      };
+    }
+
+    progress?.(`Asking for ${missing.length === 1 ? "credential" : "credentials"}: ${missing.join(", ")}`);
+
+    let result: Awaited<ReturnType<Server["elicitInput"]>>;
+    try {
+      result = await this.server.elicitInput({
+        message: `"${namespace}" can't start without ${missing.join(", ")}. Provide ${missing.length === 1 ? "it" : "them"} to retry, or decline to cancel.`,
+        requestedSchema: {
+          type: "object",
+          properties,
+          required: missing,
+        },
+      });
+    } catch (err) {
+      log("warn", "Elicitation request failed", {
+        namespace,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+
+    if (result.action !== "accept" || !result.content) {
+      log("info", "User declined credential elicitation", { namespace, action: result.action });
+      return null;
+    }
+
+    const values: Record<string, string> = {};
+    for (const key of missing) {
+      const v = result.content[key];
+      if (typeof v === "string" && v.length > 0) values[key] = v;
+    }
+    if (Object.keys(values).length === 0) return null;
+
+    this.elicitedEnv.set(namespace, { ...alreadyElicited, ...values });
+    progress?.("Got credentials — retrying activation");
+    // Recurse — activateOne will merge elicitedEnv on this attempt.
+    // Returns directly so callers see the retry result verbatim.
+    return this.activateOne(namespace, progress);
   }
 
   private async handleActivate(
