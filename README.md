@@ -26,10 +26,17 @@ Your MCP client (Claude Code, Cursor, etc.)
    - **`mcp_connect_deactivate`** — disconnect and remove tools.
    - **`mcp_connect_import`** — bulk-import servers from an existing client config (`claude_desktop_config.json`, `mcp.json`, etc.).
    - **`mcp_connect_health`** — show call counts, error rates, and latency per active connection.
+   - **`mcp_connect_suggest`** — surface recurring multi-server workflows mcph has watched in this session. When you repeatedly use `gh` → `linear` → `slack` for the same kind of task, `suggest` lists the pattern so you can dispatch it as one intent next time.
 
 Only activated servers load tools into context. This keeps your context window clean.
 
 Ranking is two-stage when the backend has a Voyage embeddings key configured: a local BM25 pass narrows to a shortlist, then a `/api/connect/rerank` call semantically reorders. With no key on the backend it gracefully degrades to BM25-only — `dispatch` and `discover(context)` keep working, just with slightly weaker ranking on ambiguous queries.
+
+On top of the ranker, mcph applies three session-local signals to dispatch scores:
+
+- **Health-aware**: servers that have recently failed to activate or have high error rates get down-ranked. Never boosts above raw — "all else equal, prefer the one that works".
+- **Learning**: servers that have succeeded this session get a small (+10% max) nudge, so the router remembers what's been useful.
+- **Sampling tiebreak**: when the top two candidates are within 10% of each other and your client supports [MCP sampling](https://modelcontextprotocol.io/specification/server/sampling), mcph asks your client's LLM to pick. Uses the model you're already running — no extra provider key, no extra cost to mcph.
 
 ## Install
 
@@ -151,7 +158,37 @@ You can activate multiple at once: `> Activate GitHub and Slack`. Tools are name
 Deactivated "gh". Tools removed.
 ```
 
-Servers also auto-deactivate after 10 tool calls to other servers, so context stays clean even if you forget.
+Servers also auto-deactivate after ~10 tool calls to other servers, so context stays clean even if you forget. The threshold is adaptive per-namespace: a server that's been called in bursts recently gets more patience (up to +20) before it's deactivated, so heavily-used servers don't get torn down mid-task. Long-idle servers still deactivate at the baseline.
+
+## Project profiles (`.mcph.json`)
+
+A project can scope which of your configured mcph servers are allowed to activate inside it by committing a `.mcph.json` at the project root:
+
+```json
+{
+  "servers": ["gh", "pg", "linear"],
+  "blocked": ["prod-db"]
+}
+```
+
+Both fields are optional:
+
+- `servers` — if set, only these namespaces can activate while you're inside this project tree.
+- `blocked` — these namespaces are denied even if listed in `servers`.
+
+mcph walks up from the current working directory looking for a `.mcph.json`. You can also keep a personal baseline at `~/.mcph.json` that applies everywhere, and layer a per-project file on top:
+
+- **Only user-global** → use as-is.
+- **Only project-local** → use as-is.
+- **Both** → the project's `servers` list wins (explicit per-project scope); `blocked` is the UNION (fail-safe on deny).
+
+`MCPH_PROFILE=/path/to/profile.json` overrides everything and skips user-global entirely. Malformed files log a warning and fall through — fail-open so a typo doesn't brick the session.
+
+`mcp_connect_health` shows which profile(s) are currently applied so you can see what's active at a glance.
+
+## Elicitation for missing credentials
+
+When a server fails to start with stderr like `GITHUB_TOKEN is required` and your client advertises the MCP [elicitation](https://modelcontextprotocol.io/specification/server/elicitation) capability, mcph prompts you for the missing value inline and retries activation. Values stay in-memory for the current mcph session only — persist them in the mcp.hosting dashboard if you want them across restarts.
 
 ### Test from the dashboard
 
@@ -175,13 +212,20 @@ mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config change
 | `MCPH_POLL_INTERVAL` | No | Config-poll interval in seconds. `0` disables polling (config fetched once at startup). Default: `60` |
 | `MCPH_AUTO_ACTIVATE` | No | When `discover` is called with a context string and one server clearly wins, auto-activate it. Set to `0` to disable. Default: enabled |
 | `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
-| `MCP_CONNECT_IDLE_THRESHOLD` | No | Tool calls to other servers before auto-deactivating an idle server (default: `10`) |
+| `MCP_CONNECT_IDLE_THRESHOLD` | No | Baseline for idle auto-deactivate (default: `10`). The per-namespace adaptive cap is `[5, 50]` — bursty namespaces extend past the baseline, long-idle ones deactivate at it. |
+| `MCPH_PROFILE` | No | Absolute path to an explicit `.mcph.json` profile. Overrides both project-walk-up discovery and `~/.mcph.json`. |
 
 ## Runtime detection
 
 On startup, mcph probes your machine for `node`, `npx`, `python`, `uvx`, and `docker` and reports the snapshot to mcp.hosting. The dashboard uses this to warn before you add a catalog server whose runtime isn't installed (e.g., adding the Sentry server when Python isn't on your PATH). No prompt, no LLM round-trip — just a yellow banner on the Add Server form.
 
 The detection is best-effort: each probe has a 3-second timeout and missing runtimes are recorded as absent rather than blocking startup. mcph itself only requires Node.js — every other runtime is optional and only matters for servers that need it.
+
+### Automatic `uv` bootstrap
+
+The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.) all launch via Astral's `uv`/`uvx`. mcph ships its own bootstrap for these: on first encounter with a `uv`/`uvx` command, if the binary isn't on your PATH, mcph lazily downloads Astral's standalone `uv` release, verifies the sha256, and caches it under the platform-appropriate cache dir. Subsequent activations reuse the cached binary. If you already have `uv` installed, mcph uses your version and never downloads.
+
+`uvx ARGS` is always rewritten to `uv tool run ARGS` at spawn time — so only `uv` needs to be reachable, not `uvx` separately. Fixes Windows setups where one was on PATH and the other wasn't.
 
 ## Requirements
 
