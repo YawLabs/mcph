@@ -87,7 +87,16 @@ async function probe(name: string, p: Probe): Promise<string | boolean> {
     try {
       child = spawn(p.bin, p.args, {
         stdio: ["ignore", "pipe", "pipe"],
-        shell: false,
+        // Windows needs a shell for PATH lookup of .cmd/.bat shims —
+        // node/npx/uvx arrive as `npx.cmd` in PATH, and native spawn
+        // with shell:false only resolves .exe. Without this, probes
+        // falsely report `npx: false` on every Windows machine and
+        // mcp.hosting's Test button pre-flight short-circuits with
+        // "npx not detected" even though upstream activation (which
+        // goes through cross-spawn in the MCP SDK) would work fine.
+        // All probe args are fixed `--version` strings with no shell
+        // metacharacters, so cmd.exe quoting is a non-issue.
+        shell: process.platform === "win32",
         windowsHide: process.platform === "win32",
       });
     } catch {
