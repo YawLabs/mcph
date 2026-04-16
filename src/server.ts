@@ -16,6 +16,7 @@ import { initAnalytics, recordConnectEvent, shutdownAnalytics } from "./analytic
 import { ConfigError, fetchConfig } from "./config.js";
 import { log } from "./logger.js";
 import { META_TOOLS, META_TOOL_NAMES } from "./meta-tools.js";
+import { type ProgressReporter, createProgressReporter } from "./progress.js";
 import {
   type PromptRoute,
   type ResourceRoute,
@@ -133,9 +134,9 @@ export class ConnectServer {
       tools: buildToolList(this.connections),
     }));
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
-      return this.handleToolCall(name, args ?? {});
+      return this.handleToolCall(name, args ?? {}, extra);
     });
 
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
@@ -220,23 +221,25 @@ export class ConnectServer {
   private async handleToolCall(
     name: string,
     args: Record<string, unknown>,
+    extra?: { sendNotification?: any; _meta?: Record<string, unknown> },
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+    const progress = createProgressReporter(extra);
     if (name === META_TOOLS.discover.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "discover", latencyMs: null, success: true });
       // When the LLM supplies task context, automatically warm the top
       // confident candidate so a one-shot discover() is enough to start
       // calling tools. Ambiguous queries fall through to the manual list.
-      return this.handleDiscoverWithAutoWarm(args.context as string | undefined);
+      return this.handleDiscoverWithAutoWarm(args.context as string | undefined, progress);
     }
     if (name === META_TOOLS.dispatch.name) {
       const intent = typeof args.intent === "string" ? args.intent : "";
       const budget = typeof args.budget === "number" && Number.isFinite(args.budget) ? args.budget : 1;
       recordConnectEvent({ namespace: null, toolName: null, action: "activate", latencyMs: null, success: true });
-      return this.handleDispatch(intent, budget);
+      return this.handleDispatch(intent, budget, progress);
     }
     if (name === META_TOOLS.activate.name) {
       const namespaces = resolveNamespaces(args);
-      const result = await this.handleActivate(namespaces);
+      const result = await this.handleActivate(namespaces, progress);
       for (const ns of namespaces) {
         recordConnectEvent({
           namespace: ns,
@@ -456,6 +459,7 @@ export class ConnectServer {
 
   private async handleDiscoverWithAutoWarm(
     context?: string,
+    progress?: ProgressReporter,
   ): Promise<{ content: Array<{ type: string; text: string }> }> {
     if (!context || !ConnectServer.AUTO_ACTIVATE_ENABLED) return this.handleDiscover(context);
 
@@ -483,7 +487,8 @@ export class ConnectServer {
     const existing = this.connections.get(top.namespace);
     if (existing && existing.status === "connected") return this.handleDiscover(context);
 
-    const result = await this.activateOne(top.namespace);
+    progress?.(`Auto-warming top candidate "${top.namespace}"`);
+    const result = await this.activateOne(top.namespace, progress);
     if (result.ok) {
       log("info", "Auto-warmed top-ranked server on discover", { namespace: top.namespace, score: top.score });
     }
@@ -587,9 +592,11 @@ export class ConnectServer {
   //   { ok: false, message, isChanged: false } — failed or not in config
   private async activateOne(
     namespace: string,
+    progress?: ProgressReporter,
   ): Promise<{ ok: boolean; message: string; isChanged: boolean; serverId?: string }> {
     const existing = this.connections.get(namespace);
     if (existing && existing.status === "connected") {
+      progress?.(`"${namespace}" already active`);
       return {
         ok: true,
         isChanged: false,
@@ -606,7 +613,11 @@ export class ConnectServer {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        progress?.(
+          attempt === 0 ? `Spawning "${namespace}" upstream…` : `Retrying "${namespace}" (attempt ${attempt + 1})…`,
+        );
         const connection = await connectToUpstream(serverConfig, this.onUpstreamDisconnect, this.onUpstreamListChanged);
+        progress?.(`"${namespace}" loaded ${connection.tools.length} tools`);
         this.connections.set(namespace, connection);
         this.idleCallCounts.set(namespace, 0);
         const toolMeta = connection.tools.map((t) => ({ name: t.name, description: t.description }));
@@ -651,6 +662,7 @@ export class ConnectServer {
 
   private async handleActivate(
     namespaces: string[],
+    progress?: ProgressReporter,
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
     if (namespaces.length === 0) {
       return {
@@ -665,12 +677,17 @@ export class ConnectServer {
     let anyChanged = false;
     let anyError = false;
 
+    const total = namespaces.length;
+    let i = 0;
     for (const namespace of namespaces) {
-      const r = await this.activateOne(namespace);
+      i += 1;
+      progress?.(`Activating ${namespace} (${i}/${total})`, i - 1, total);
+      const r = await this.activateOne(namespace, progress);
       results.push(r.message);
       if (r.isChanged) anyChanged = true;
       if (!r.ok) anyError = true;
     }
+    progress?.(anyChanged ? "Done" : "No changes", total, total);
 
     if (anyChanged) {
       this.rebuildRoutes();
@@ -691,6 +708,7 @@ export class ConnectServer {
   private async handleDispatch(
     intent: string,
     budget: number,
+    progress?: ProgressReporter,
   ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
     const trimmed = intent?.trim?.() ?? "";
     if (trimmed.length === 0) {
@@ -716,6 +734,7 @@ export class ConnectServer {
       };
     }
 
+    progress?.(`Ranking ${activeServers.length} servers…`);
     // Two-stage: local BM25 filters to a shortlist, /api/connect/rerank
     // semantically reorders it via Voyage. Falls back to BM25 alone when
     // rerank is off or times out, so dispatch is robust in every mode.
@@ -740,12 +759,16 @@ export class ConnectServer {
     let anyChanged = false;
     let anyError = false;
 
+    let i = 0;
     for (const winner of winners) {
-      const r = await this.activateOne(winner.namespace);
+      i += 1;
+      progress?.(`Activating ${winner.namespace} (${i}/${winners.length})`, i - 1, winners.length);
+      const r = await this.activateOne(winner.namespace, progress);
       results.push(`${winner.namespace} (score ${winner.score.toFixed(2)}): ${r.message}`);
       if (r.isChanged) anyChanged = true;
       if (!r.ok) anyError = true;
     }
+    progress?.("Dispatch complete", winners.length, winners.length);
 
     if (anyChanged) {
       this.rebuildRoutes();
