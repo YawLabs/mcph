@@ -40,62 +40,86 @@ On top of the ranker, mcph applies three session-local signals to dispatch score
 
 ## Install
 
-### Claude Code
+### One command (recommended)
 
-```json
-{
-  "mcpServers": {
-    "mcph": {
-      "command": "npx",
-      "args": ["-y", "@yawlabs/mcph"],
-      "env": {
-        "MCPH_TOKEN": "mcp_pat_your_token_here"
-      }
-    }
-  }
-}
+```bash
+npx -y @yawlabs/mcph install <claude-code|claude-desktop|cursor|vscode> --token mcp_pat_your_token_here
 ```
 
-### Cursor / VS Code
+This:
 
-Add to your MCP settings:
+1. Edits the chosen client's config file (correct path for your OS, correct JSON shape) to launch mcph.
+2. Writes your token to `~/.mcph.json` so every other client you install picks it up automatically — no need to copy the token into each client's `env` block.
+3. On Windows, wraps `npx` in `cmd /c` (without this, MCP clients hit `ENOENT` on the `npx.cmd` shim).
 
-```json
-{
-  "mcph": {
-    "command": "npx",
-    "args": ["-y", "@yawlabs/mcph"],
-    "env": {
-      "MCPH_TOKEN": "mcp_pat_your_token_here"
-    }
-  }
-}
+Run it once per client. To rotate the token later, run `install` again with `--token` — both files get rewritten.
+
+Helpful flags:
+
+- `--scope user|project|local` — which file to write (Claude Code + Cursor support project/local; VS Code is workspace-only; Claude Desktop is user-only).
+- `--dry-run` — print the diff and exit without writing.
+- `--force` / `--skip` — overwrite or leave an existing `mcp.hosting` entry. Without either, mcph prompts (TTY) or refuses (non-TTY).
+- `--no-mcph-config` — write only the client config; leave `~/.mcph.json` untouched.
+
+Or [edit the JSON by hand](#manual-install) if you'd rather.
+
+### Diagnose problems — `mcph doctor`
+
+```bash
+npx -y @yawlabs/mcph doctor
 ```
 
-### Claude Desktop
+Prints the loaded config files, your token's source + fingerprint (last 4 chars), the API base URL, and which MCP clients on this machine have an `mcp.hosting` entry. Exits `0` healthy / `1` no token / `2` warnings (e.g. world-readable token file). Paste the full output into a support ticket and we can usually pinpoint the issue from that alone.
 
-Add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mcph": {
-      "command": "npx",
-      "args": ["-y", "@yawlabs/mcph"],
-      "env": {
-        "MCPH_TOKEN": "mcp_pat_your_token_here"
-      }
-    }
-  }
-}
-```
-
-## Getting your token
+### Getting your token
 
 1. Sign up at [mcp.hosting](https://mcp.hosting)
 2. Go to **Settings > API Tokens**
 3. Create a token — it starts with `mcp_pat_`
-4. Add it to your MCP client config as shown above
+4. Pass it to `mcph install` as shown above
+
+### Manual install
+
+If you'd rather edit the config files yourself, the JSON shapes are:
+
+**Claude Code, Cursor, Claude Desktop** — top-level key `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "mcp.hosting": {
+      "command": "npx",
+      "args": ["-y", "@yawlabs/mcph"]
+    }
+  }
+}
+```
+
+**VS Code** — top-level key `servers` (NOT `mcpServers`) in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "mcp.hosting": {
+      "command": "npx",
+      "args": ["-y", "@yawlabs/mcph"]
+    }
+  }
+}
+```
+
+**Windows** — `command: "cmd", args: ["/c", "npx", "-y", "@yawlabs/mcph"]` (the `cmd /c` wrapper is required because `npx.cmd` is a shim).
+
+Then put your token in `~/.mcph.json` so mcph picks it up at startup:
+
+```json
+{
+  "version": 1,
+  "token": "mcp_pat_your_token_here"
+}
+```
+
+Or set `MCPH_TOKEN` in the client's `env` block — both work.
 
 ## Adding servers
 
@@ -160,31 +184,55 @@ Deactivated "gh". Tools removed.
 
 Servers also auto-deactivate after ~10 tool calls to other servers, so context stays clean even if you forget. The threshold is adaptive per-namespace: a server that's been called in bursts recently gets more patience (up to +20) before it's deactivated, so heavily-used servers don't get torn down mid-task. Long-idle servers still deactivate at the baseline.
 
-## Project profiles (`.mcph.json`)
+## `.mcph.json` config file
 
-A project can scope which of your configured mcph servers are allowed to activate inside it by committing a `.mcph.json` at the project root:
+mcph reads its own config from `.mcph.json` files at three optional locations (highest precedence first):
 
-```json
+| Scope | Path | Holds |
+|-------|------|-------|
+| **local** | `<project>/.mcph.local.json` | Machine-local override; `gitignore` it. Token allowed. |
+| **project** | `<project>/.mcph.json` | Shared with the team via git. Token NOT allowed (warned). |
+| **global** | `~/.mcph.json` | Personal default for every project. Token allowed. |
+
+Full schema:
+
+```jsonc
 {
+  // Schema version. mcph >= 0.11 emits version 1; older fields stay
+  // readable. Newer versions log a warning so an old mcph can't silently
+  // miss new fields.
+  "version": 1,
+
+  // Personal access token from mcp.hosting → Settings → API Tokens.
+  // env MCPH_TOKEN still wins over the file value.
+  "token": "mcp_pat_your_token_here",
+
+  // API base override — point mcph at a self-hosted backend or staging.
+  // Defaults to https://mcp.hosting. env MCPH_URL still wins.
+  "apiBase": "https://mcp.hosting",
+
+  // Project profile: which namespaces are allowed.
   "servers": ["gh", "pg", "linear"],
+
+  // Project profile: namespaces denied even if in `servers`.
   "blocked": ["prod-db"]
 }
 ```
 
-Both fields are optional:
+**Comments are allowed** (line `//` and block `/* … */`) — handy for documenting a shared `.mcph.json` checked into git.
 
-- `servers` — if set, only these namespaces can activate while you're inside this project tree.
-- `blocked` — these namespaces are denied even if listed in `servers`.
+**Resolution:**
 
-mcph walks up from the current working directory looking for a `.mcph.json`. You can also keep a personal baseline at `~/.mcph.json` that applies everywhere, and layer a per-project file on top:
+- **Token** — `MCPH_TOKEN` env > local > global. (`token` in the project file is ignored and warned: it'd get committed to git.)
+- **apiBase** — `MCPH_URL` env > local > project > global > `https://mcp.hosting`.
+- **servers** allow-list — project wins if set, else local, else global.
+- **blocked** deny-list — UNION across every scope that sets it (fail-safe on deny).
+- Malformed files log a warning and fall through — fail-open so a typo doesn't brick the session.
+- On POSIX, mcph warns if the file contains a token and is readable by group/other; run `chmod 600 ~/.mcph.json` to silence it.
 
-- **Only user-global** → use as-is.
-- **Only project-local** → use as-is.
-- **Both** → the project's `servers` list wins (explicit per-project scope); `blocked` is the UNION (fail-safe on deny).
+**Token rotation**: mcph reads its config at startup. After editing `~/.mcph.json`, restart the MCP client (or kill mcph; the client respawns it).
 
-`MCPH_PROFILE=/path/to/profile.json` overrides everything and skips user-global entirely. Malformed files log a warning and fall through — fail-open so a typo doesn't brick the session.
-
-`mcp_connect_health` shows which profile(s) are currently applied so you can see what's active at a glance.
+`MCPH_PROFILE=/path/to/profile.json` overrides project-walk-up discovery and skips user-global entirely (same behavior as before). `mcp_connect_health` shows which file(s) are currently applied.
 
 ## Elicitation for missing credentials
 
@@ -206,8 +254,8 @@ mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config change
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MCPH_TOKEN` | Yes | Your personal access token from mcp.hosting |
-| `MCPH_URL` | No | API URL (default: `https://mcp.hosting`) |
+| `MCPH_TOKEN` | Yes (or in `~/.mcph.json`) | Personal access token from mcp.hosting. Env wins over `~/.mcph.json`. |
+| `MCPH_URL` | No | API URL (default: `https://mcp.hosting`). Env wins over `apiBase` in `.mcph.json`. |
 | `LOG_LEVEL` | No | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
 | `MCPH_POLL_INTERVAL` | No | Config-poll interval in seconds. `0` disables polling (config fetched once at startup). Default: `60` |
 | `MCPH_AUTO_ACTIVATE` | No | When `discover` is called with a context string and one server clearly wins, auto-activate it. Set to `0` to disable. Default: enabled |
