@@ -37,6 +37,7 @@ import {
 import { type RankableServer, rankServers, scoreRelevance } from "./relevance.js";
 import { initRerank, rerank } from "./rerank.js";
 import { initRuntimeDetect, reportRuntimes } from "./runtime-detect.js";
+import { buildCandidates, shouldTiebreak, tiebreakViaSampling } from "./sampling-rank.js";
 import { initTestRunner, startTestRunner, stopTestRunner } from "./test-runner.js";
 import { initToolReport, reportTools } from "./tool-report.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
@@ -933,6 +934,29 @@ export class ConnectServer {
         ],
         isError: true,
       };
+    }
+
+    // Sampling tiebreak: when BM25+rerank+health rank the top-2
+    // candidates within a close margin, ask the client LLM to choose.
+    // Uses the same model the user is already running — no extra
+    // provider key, no extra cost from mcph's side. Silently skips if
+    // the client doesn't advertise the sampling capability.
+    if (budget === 1 && shouldTiebreak(ranked)) {
+      progress?.("Top candidates close — asking LLM to pick…");
+      const serversByNamespace = new Map(activeServers.map((s) => [s.namespace, s]));
+      const candidates = buildCandidates(ranked.slice(0, 3), serversByNamespace, this.toolCache);
+      const picked = await tiebreakViaSampling(this.server, trimmed, candidates);
+      if (picked) {
+        const winner = ranked.find((r) => r.namespace === picked);
+        if (winner) {
+          // Re-sort so the LLM's pick sits at position 0; preserve the
+          // rest of the order so budget>1 callers still see a stable list.
+          const rest = ranked.filter((r) => r.namespace !== picked);
+          ranked.length = 0;
+          ranked.push(winner, ...rest);
+          progress?.(`LLM chose ${picked}`);
+        }
+      }
     }
 
     const safeBudget = Math.max(1, Math.min(10, Math.floor(budget)));
