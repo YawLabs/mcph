@@ -16,6 +16,7 @@ import { initAnalytics, recordConnectEvent, shutdownAnalytics } from "./analytic
 import { ConfigError, fetchConfig } from "./config.js";
 import { log } from "./logger.js";
 import { META_TOOLS, META_TOOL_NAMES } from "./meta-tools.js";
+import { type Profile, loadProfile, profileAllows } from "./profile.js";
 import { type ProgressReporter, createProgressReporter } from "./progress.js";
 import {
   type PromptRoute,
@@ -105,6 +106,7 @@ export class ConnectServer {
   private promptRoutes = new Map<string, PromptRoute>();
   private idleCallCounts = new Map<string, number>();
   private toolCache = new Map<string, Array<{ name: string; description?: string }>>();
+  private profile: Profile | null = null;
 
   private static readonly IDLE_CALL_THRESHOLD = (() => {
     const env = process.env.MCP_CONNECT_IDLE_THRESHOLD;
@@ -178,6 +180,15 @@ export class ConnectServer {
     this.promptRoutes = buildPromptRoutes(this.connections);
   }
 
+  // Active servers, narrowed by the project profile if one is loaded.
+  // Centralizing this here means discover/dispatch/auto-warm all see the
+  // same set — no accidental bypass of the profile via a second code path.
+  private getProfiledActiveServers(): UpstreamServerConfig[] {
+    const all = (this.config?.servers ?? []).filter((s) => s.isActive);
+    if (!this.profile) return all;
+    return all.filter((s) => profileAllows(this.profile, s.namespace));
+  }
+
   private async notifyAllListsChanged(): Promise<void> {
     await this.server.sendToolListChanged().catch(() => {});
     await this.server.sendResourceListChanged().catch(() => {});
@@ -185,6 +196,18 @@ export class ConnectServer {
   }
 
   async start(): Promise<void> {
+    // Project profile: walks up from cwd for .mcph.json so a repo can
+    // declare which configured servers are allowed inside it. Failure
+    // is silent — fail-open so a bad profile doesn't brick the session.
+    this.profile = await loadProfile(process.cwd()).catch(() => null);
+    if (this.profile) {
+      log("info", "Loaded project profile", {
+        path: this.profile.path,
+        allow: this.profile.servers,
+        block: this.profile.blocked,
+      });
+    }
+
     // Fetch config — non-fatal errors allow startup with empty config
     try {
       await this.fetchAndApplyConfig();
@@ -473,7 +496,7 @@ export class ConnectServer {
   ): Promise<{ content: Array<{ type: string; text: string }> }> {
     if (!context || !ConnectServer.AUTO_ACTIVATE_ENABLED) return this.handleDiscover(context);
 
-    const activeServers = (this.config?.servers ?? []).filter((s) => s.isActive);
+    const activeServers = this.getProfiledActiveServers();
     if (activeServers.length === 0) return this.handleDiscover(context);
 
     const ranked = rankServers(
@@ -521,7 +544,7 @@ export class ConnectServer {
       };
     }
 
-    const activeServers = this.config.servers.filter((s) => s.isActive);
+    const activeServers = this.getProfiledActiveServers();
 
     // Score and sort using corpus-wide BM25 when context is provided.
     // Servers that don't match any query term simply fall out of the
@@ -618,6 +641,14 @@ export class ConnectServer {
     const serverConfig = this.config?.servers.find((s) => s.namespace === namespace && s.isActive);
     if (!serverConfig) {
       return { ok: false, isChanged: false, message: `"${namespace}" not found or disabled.` };
+    }
+
+    if (!profileAllows(this.profile, namespace)) {
+      return {
+        ok: false,
+        isChanged: false,
+        message: `"${namespace}" is not allowed by the project profile at ${this.profile?.path}.`,
+      };
     }
 
     let lastError: unknown = null;
@@ -734,11 +765,17 @@ export class ConnectServer {
       };
     }
 
-    const activeServers = this.config.servers.filter((s) => s.isActive);
+    const activeServers = this.getProfiledActiveServers();
     if (activeServers.length === 0) {
+      const note = this.profile
+        ? ` (project profile at ${this.profile.path} restricts which servers are available)`
+        : "";
       return {
         content: [
-          { type: "text", text: "No servers enabled. Enable servers at mcp.hosting or re-run mcp_connect_discover." },
+          {
+            type: "text",
+            text: `No servers enabled${note}. Enable servers at mcp.hosting or re-run mcp_connect_discover.`,
+          },
         ],
         isError: true,
       };
@@ -1093,11 +1130,20 @@ export class ConnectServer {
   }
 
   private handleHealth(): { content: Array<{ type: string; text: string }> } {
-    if (this.connections.size === 0) {
-      return { content: [{ type: "text", text: "No active connections." }] };
+    const lines: string[] = [];
+    if (this.profile) {
+      lines.push(`Project profile: ${this.profile.path}`);
+      if (this.profile.servers?.length) lines.push(`  allow: ${this.profile.servers.join(", ")}`);
+      if (this.profile.blocked?.length) lines.push(`  block: ${this.profile.blocked.join(", ")}`);
+      lines.push("");
     }
 
-    const lines: string[] = ["Connection health:\n"];
+    if (this.connections.size === 0) {
+      lines.push("No active connections.");
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    }
+
+    lines.push("Connection health:\n");
 
     for (const [namespace, conn] of this.connections) {
       const h = conn.health;
