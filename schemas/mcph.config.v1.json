@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/YawLabs/mcph/main/schemas/mcph.config.v1.json",
+  "title": "mcph CLI configuration (.mcph.json)",
+  "description": "Configuration file for the @yawlabs/mcph CLI, which manages MCP servers via the mcp.hosting registry. Resolved in precedence order (most-specific to least-specific): <cwd>/.mcph.local.json  >  <cwd>/.mcph.json  >  ~/.mcph.json. Environment variables MCPH_TOKEN and MCPH_URL override file values. JSONC (comments) is permitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional pointer to this JSON Schema, enabling IDE autocomplete in editors that honor $schema."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Config schema version. Current version: 1. A value newer than the CLI understands triggers a warning but is not fatal."
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^mcp_pat_[A-Za-z0-9_-]+$",
+      "description": "Personal access token for mcp.hosting. SECURITY: must NOT appear in a committed project-scope .mcph.json. Only valid in ~/.mcph.json (user-global) or .mcph.local.json (machine-local, gitignored). The MCPH_TOKEN environment variable overrides this value."
+    },
+    "apiBase": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://",
+      "description": "Base URL of the mcp.hosting API. Default: https://mcp.hosting. The MCPH_URL environment variable overrides this value."
+    },
+    "servers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Allow-list of server namespaces to activate. If set in any scope, only these servers are active. Precedence: project scope wins over local-project, which wins over global."
+    },
+    "blocked": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Deny-list of server namespaces that are never activated. Merged as a union across all scopes (additive, not overriding)."
+    }
+  },
+  "examples": [
+    {
+      "version": 1,
+      "apiBase": "https://mcp.hosting",
+      "servers": ["github", "filesystem"],
+      "blocked": ["legacy-db"]
+    },
+    {
+      "version": 1,
+      "token": "mcp_pat_aBcDeFgHiJkLmNoP"
+    }
+  ]
+}
