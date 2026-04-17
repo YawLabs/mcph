@@ -27,9 +27,22 @@ export interface RerankResult {
 // similarity to the intent. Returns null when rerank is unavailable
 // (key absent, candidates not yet embedded, timeout, any non-2xx) so
 // the caller can stick with BM25 without ceremony.
-export async function rerank(intent: string, candidateIds: string[]): Promise<RerankResult[] | null> {
+//
+// `candidateIds` is optional. When omitted, the backend runs a top-K
+// pgvector search over the caller's entire library (personal + team)
+// — used by discover to surface semantically-relevant servers the
+// user hasn't activated yet, without BM25 having to shortlist first.
+export async function rerank(intent: string, candidateIds?: string[], limit?: number): Promise<RerankResult[] | null> {
   if (!apiUrl || !token) return null;
-  if (!intent?.trim() || candidateIds.length === 0) return null;
+  if (!intent?.trim()) return null;
+  // Treat "empty array provided" as "caller has no BM25 shortlist to
+  // narrow against" — same fallback as no-array. Only skip the call
+  // when the caller explicitly opted into shortlist mode with zero ids.
+  if (candidateIds !== undefined && candidateIds.length === 0) return null;
+
+  const payload: { intent: string; candidateIds?: string[]; limit?: number } = { intent: intent.trim() };
+  if (candidateIds && candidateIds.length > 0) payload.candidateIds = candidateIds;
+  if (typeof limit === "number" && limit > 0) payload.limit = limit;
 
   try {
     const res = await request(`${apiUrl.replace(/\/$/, "")}/api/connect/rerank`, {
@@ -38,7 +51,7 @@ export async function rerank(intent: string, candidateIds: string[]): Promise<Re
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ intent: intent.trim(), candidateIds }),
+      body: JSON.stringify(payload),
       headersTimeout: RERANK_TIMEOUT_MS,
       bodyTimeout: RERANK_TIMEOUT_MS,
     });

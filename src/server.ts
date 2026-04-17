@@ -816,10 +816,12 @@ export class ConnectServer {
     const activeServers = this.getProfiledActiveServers();
     if (activeServers.length === 0) return this.handleDiscover(context);
 
-    const ranked = rankServers(
-      context,
-      activeServers.map((s) => this.rankableFor(s)),
-    );
+    // Use the same two-stage ranker dispatch uses so discover + dispatch
+    // pick the same winner for the same intent. BM25 shortlists locally;
+    // the backend cosines the shortlist against stored embeddings. When
+    // rerank is unavailable this silently falls back to BM25-only.
+    const ranked = await this.twoStageRank(context, activeServers);
+    if (ranked.length === 0) return this.handleDiscover(context);
 
     // Only auto-warm if one candidate dominates: top score clears the
     // floor and either stands alone or beats the runner-up by the

@@ -173,6 +173,37 @@ describe("rerank client", () => {
       { id: "id-1", score: 0.7 },
     ]);
   });
+
+  it("calls the backend with just intent when candidateIds is omitted (global mode)", async () => {
+    vi.mocked(request).mockResolvedValue(
+      mockOkResponse({
+        results: [{ id: "top", score: 0.88 }],
+      }) as any,
+    );
+    const result = await rerank("file a github issue");
+    expect(result).toEqual([{ id: "top", score: 0.88 }]);
+
+    // Body should have intent only — no candidateIds, no limit.
+    const call = vi.mocked(request).mock.calls[0];
+    const body = JSON.parse((call[1] as any).body);
+    expect(body).toEqual({ intent: "file a github issue" });
+  });
+
+  it("passes limit to the backend when provided", async () => {
+    vi.mocked(request).mockResolvedValue(mockOkResponse({ results: [{ id: "a", score: 0.9 }] }) as any);
+    await rerank("query", undefined, 10);
+    const call = vi.mocked(request).mock.calls[0];
+    const body = JSON.parse((call[1] as any).body);
+    expect(body).toEqual({ intent: "query", limit: 10 });
+  });
+
+  it("omits limit when non-positive", async () => {
+    vi.mocked(request).mockResolvedValue(mockOkResponse({ results: [{ id: "a", score: 0.9 }] }) as any);
+    await rerank("query", undefined, 0);
+    const call = vi.mocked(request).mock.calls[0];
+    const body = JSON.parse((call[1] as any).body);
+    expect(body).toEqual({ intent: "query" });
+  });
 });
 
 describe("handleDispatch two-stage ranking", () => {
