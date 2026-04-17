@@ -272,13 +272,26 @@ export function buildInstallPayload(args: Record<string, unknown>): InstallPaylo
   if (type === "remote") {
     const url = typeof args.url === "string" ? args.url.trim() : "";
     if (!url) return { ok: false, message: '`url` is required when type="remote".' };
+    let parsed: URL;
     try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-        return { ok: false, message: "`url` must be an http(s) URL." };
-      }
+      parsed = new URL(url);
     } catch {
       return { ok: false, message: "`url` must be a valid URL." };
+    }
+    // Remote MCP servers carry bearer tokens / session cookies. A
+    // plaintext http:// URL leaks those on any untrusted network hop,
+    // so require https:// — with the single exception of loopback,
+    // so `mcph install` can wire up a dev server on localhost.
+    if (parsed.protocol === "https:") {
+      // ok
+    } else if (parsed.protocol === "http:") {
+      const host = parsed.hostname;
+      const isLoopback = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+      if (!isLoopback) {
+        return { ok: false, message: "`url` must use https:// (http:// is only allowed for localhost)." };
+      }
+    } else {
+      return { ok: false, message: "`url` must use the https:// scheme." };
     }
     payload.url = url;
   }

@@ -183,6 +183,48 @@ describe("buildInstallPayload — rejects invalid input", () => {
     expect(r.message).toMatch(/http/i);
   });
 
+  it("rejects remote with plaintext http:// for a public host (credential leak)", () => {
+    const r = buildInstallPayload({
+      name: "Notion",
+      namespace: "notion",
+      type: "remote",
+      url: "http://mcp.notion.com/sse",
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toMatch(/https:/);
+  });
+
+  it("accepts http://localhost for dev servers", () => {
+    const r = buildInstallPayload({
+      name: "Dev",
+      namespace: "dev",
+      type: "remote",
+      url: "http://localhost:3000/sse",
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("accepts http://127.0.0.1 for dev servers", () => {
+    const r = buildInstallPayload({
+      name: "Dev",
+      namespace: "dev",
+      type: "remote",
+      url: "http://127.0.0.1:3000/sse",
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("accepts http://[::1] for dev servers", () => {
+    const r = buildInstallPayload({
+      name: "Dev",
+      namespace: "dev",
+      type: "remote",
+      url: "http://[::1]:3000/sse",
+    });
+    expect(r.ok).toBe(true);
+  });
+
   it("rejects args that isn't an array", () => {
     const r = buildInstallPayload({
       name: "GH",

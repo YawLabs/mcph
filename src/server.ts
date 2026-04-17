@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -1618,6 +1618,31 @@ export class ConnectServer {
               type: "text",
               text: `Only MCP config files are allowed: ${ALLOWED_FILENAMES.join(", ")}. Got: ${resolvedBasename}`,
             },
+          ],
+          isError: true,
+        };
+      }
+      // Scope the file read to the user's home dir OR cwd. The
+      // basename allowlist above stops arbitrary reads from proving
+      // contents, but a caller can still probe for file existence at
+      // odd paths (e.g. `/var/log/claude_desktop_config.json`). All
+      // legitimate imports live under home (Claude Desktop configs)
+      // or cwd (project-local `.mcp.json`), so anything outside both
+      // is almost certainly an oracle probe — refuse it.
+      //
+      // `path.relative` returns an absolute-looking string when the
+      // two paths sit on different Windows drives (no relative-traversal
+      // between C: and D: exists), so the `..`-prefix check alone
+      // isn't enough on Windows — also treat an absolute return value
+      // as "outside".
+      const isUnder = (base: string, p: string) => {
+        const rel = relative(base, p);
+        return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+      };
+      if (!isUnder(homedir(), resolved) && !isUnder(process.cwd(), resolved)) {
+        return {
+          content: [
+            { type: "text", text: "Import path must be under your home directory or the current working directory." },
           ],
           isError: true,
         };

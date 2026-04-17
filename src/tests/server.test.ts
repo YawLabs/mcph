@@ -1130,6 +1130,21 @@ describe("handleImport path validation", () => {
     // NOT the allowed-filename check.
     expect(result.content[0].text).not.toContain("Only MCP config files are allowed");
   });
+
+  it("rejects a resolved path outside both homedir and cwd (existence-oracle probe)", async () => {
+    const priv = getPrivate(server);
+    // An absolute path with an allowed basename but sitting outside
+    // the user's home and cwd — canonical example is `/var/log/...`
+    // on posix. On Windows, resolve() forces drive-absolute, so any
+    // drive root that isn't the user's profile or project works too.
+    const probePath =
+      process.platform === "win32"
+        ? "D:\\weirdplace\\claude_desktop_config.json"
+        : "/var/log/claude_desktop_config.json";
+    const result = await priv.handleImport(probePath);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/home directory or the current working directory/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
