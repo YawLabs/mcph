@@ -134,8 +134,9 @@ describe("loadMcphConfig — precedence", () => {
 
 describe("loadMcphConfig — JSONC support", () => {
   it("strips line + block comments before parsing", async () => {
+    const path = join(synthHome, CONFIG_FILENAME);
     writeFileSync(
-      join(synthHome, CONFIG_FILENAME),
+      path,
       `{
   // user-global config with comments
   "version": 1,
@@ -143,6 +144,7 @@ describe("loadMcphConfig — JSONC support", () => {
   "apiBase": "https://mcp.hosting"
 }`,
     );
+    if (process.platform !== "win32") chmodSync(path, 0o600);
     const r = await loadMcphConfig({ cwd: synthCwd, home: synthHome, env: {} });
     expect(r.token).toBe("mcp_pat_jsonc_aaaa");
     expect(r.warnings).toEqual([]);
