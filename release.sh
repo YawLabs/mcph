@@ -80,7 +80,7 @@ if [ "$IS_CI" != "true" ] && [ "$RESUMING" != "true" ]; then
   echo "  1. Run lint + tests"
   echo "  2. Build"
   echo "  3. Bump version in package.json"
-  echo "  4. Commit, tag, and push"
+  echo "  4. Commit, push, wait for ci.yml green on the SHA, then tag"
   echo "  5. Publish to npm"
   echo "  6. Create GitHub release"
   echo "  7. Verify"
@@ -124,9 +124,15 @@ else
 fi
 
 # =============================================================================
-# Step 4: Commit, tag, and push
+# Step 4: Commit, push, gate on green CI, then tag
 # =============================================================================
-step 4 "Commit, tag, and push"
+# Why the split:
+#   v0.11.0 burned a tag because Linux-only test failures only surfaced
+#   inside CI. The fix is: push the version-bump commit first, wait for
+#   ci.yml to go green on that exact SHA, THEN create and push the tag.
+#   That way bad commits never become bad tags. The tag space stays clean
+#   and re-tagging the same version slot becomes unnecessary.
+step 4 "Commit, push, wait for CI green, then tag"
 
 if [ "$IS_CI" = "true" ]; then
   info "CI mode — skipping commit/tag/push (already tagged)"
@@ -139,15 +145,53 @@ else
     info "Nothing to commit"
   fi
 
+  # Push the commit alone (no tag yet) so ci.yml runs on this SHA.
+  git push origin main
+  info "Pushed v${VERSION} commit"
+
   if git tag -l "v${VERSION}" | grep -q "v${VERSION}"; then
-    info "Tag v${VERSION} already exists"
+    info "Tag v${VERSION} already exists locally — skipping CI gate"
   else
+    SHA=$(git rev-parse HEAD)
+    info "Waiting for ci.yml to pass on ${SHA:0:7} before tagging..."
+
+    # Poll ci.yml status on this SHA. Timeout: 15 minutes (90 * 10s).
+    GATE_MAX=90
+    for i in $(seq 1 $GATE_MAX); do
+      RUN_JSON=$(gh run list --workflow=ci.yml --commit="$SHA" --limit 1 --json status,conclusion,databaseId 2>/dev/null || echo "[]")
+      if [ "$RUN_JSON" = "[]" ] || [ -z "$RUN_JSON" ]; then
+        echo "    ci.yml not started yet for $SHA (attempt $i/$GATE_MAX)..."
+        sleep 10
+        continue
+      fi
+      RUN_STATUS=$(echo "$RUN_JSON" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d); console.log(j[0]?.status||"")})')
+      RUN_CONCLUSION=$(echo "$RUN_JSON" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d); console.log(j[0]?.conclusion||"")})')
+      RUN_ID=$(echo "$RUN_JSON" | node -e 'let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d); console.log(j[0]?.databaseId||"")})')
+
+      if [ "$RUN_STATUS" = "completed" ]; then
+        if [ "$RUN_CONCLUSION" = "success" ]; then
+          info "ci.yml passed on $SHA (run $RUN_ID)"
+          break
+        fi
+        fail "ci.yml ${RUN_CONCLUSION} on $SHA (run $RUN_ID).
+       Tag NOT created. Inspect with: gh run view $RUN_ID --log-failed
+       Fix the issue, bump version again, and re-run release.sh."
+      fi
+      echo "    ci.yml ${RUN_STATUS} (attempt $i/$GATE_MAX)..."
+      sleep 10
+    done
+
+    # If we fell out of the loop without break, the run never completed.
+    if [ "$RUN_STATUS" != "completed" ] || [ "$RUN_CONCLUSION" != "success" ]; then
+      fail "ci.yml did not finish within 15 minutes. Tag NOT created. Re-run when ci.yml has settled."
+    fi
+
     git tag "v${VERSION}"
     info "Tag v${VERSION} created"
   fi
 
-  git push origin main --tags
-  info "Pushed to origin"
+  git push origin "v${VERSION}"
+  info "Pushed tag v${VERSION} — release.yml will publish from green commit"
 fi
 
 # =============================================================================
