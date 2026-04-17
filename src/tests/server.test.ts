@@ -99,14 +99,14 @@ describe("ConnectServer", () => {
       const priv = getPrivate(server);
       priv.config = null;
       const result = priv.handleDiscover();
-      expect(result.content[0].text).toContain("No servers configured");
+      expect(result.content[0].text).toContain("No servers installed");
     });
 
     it("returns empty message when no servers", () => {
       const priv = getPrivate(server);
       priv.config = makeConfig([]);
       const result = priv.handleDiscover();
-      expect(result.content[0].text).toContain("No servers configured");
+      expect(result.content[0].text).toContain("No servers installed");
     });
 
     it("lists active servers with status", () => {
@@ -120,9 +120,9 @@ describe("ConnectServer", () => {
 
       const result = priv.handleDiscover();
       const text = result.content[0].text;
-      expect(text).toContain("gh — GitHub [ACTIVE (2 tools)]");
-      expect(text).toContain("slack — Slack [available]");
-      expect(text).toContain("1 active, 2 tools loaded");
+      expect(text).toContain("gh — GitHub [loaded (2 tools)]");
+      expect(text).toContain("slack — Slack [ready]");
+      expect(text).toContain("1 loaded in this session, 2 tools in context");
     });
 
     it("shows disabled servers separately", () => {
@@ -196,7 +196,7 @@ describe("ConnectServer", () => {
       priv.connections.set("gh", conn);
 
       const result = await priv.handleActivate(["gh"]);
-      expect(result.content[0].text).toContain("already active");
+      expect(result.content[0].text).toContain("already loaded");
       expect(connectToUpstream).not.toHaveBeenCalled();
     });
 
@@ -210,7 +210,7 @@ describe("ConnectServer", () => {
 
       const result = await priv.handleActivate(["gh"]);
       expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toContain('Activated "gh"');
+      expect(result.content[0].text).toContain('Loaded "gh"');
       expect(priv.connections.has("gh")).toBe(true);
       expect(priv.toolCache.has("gh")).toBe(true);
       expect(priv.idleCallCounts.get("gh")).toBe(0);
@@ -226,7 +226,7 @@ describe("ConnectServer", () => {
 
       const result = await priv.handleActivate(["gh"]);
       expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toContain('Activated "gh"');
+      expect(result.content[0].text).toContain('Loaded "gh"');
       expect(connectToUpstream).toHaveBeenCalledTimes(2);
     });
 
@@ -239,7 +239,7 @@ describe("ConnectServer", () => {
 
       const result = await priv.handleActivate(["gh"]);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('Failed to activate "gh": timeout');
+      expect(result.content[0].text).toContain('Failed to load "gh": timeout');
     });
 
     it("activates multiple servers", async () => {
@@ -266,14 +266,14 @@ describe("ConnectServer", () => {
       expect(result.isError).toBe(true);
     });
 
-    it("reports when server is not active", async () => {
+    it("reports when server is not loaded", async () => {
       const priv = getPrivate(server);
       const result = await priv.handleDeactivate(["unknown"]);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("not active");
+      expect(result.content[0].text).toContain("wasn't loaded");
     });
 
-    it("deactivates an active server", async () => {
+    it("unloads a loaded server", async () => {
       const priv = getPrivate(server);
       const conn = makeConnection("gh", ["create_issue"]);
       priv.connections.set("gh", conn);
@@ -281,7 +281,7 @@ describe("ConnectServer", () => {
 
       const result = await priv.handleDeactivate(["gh"]);
       expect(result.isError).toBeUndefined();
-      expect(result.content[0].text).toContain('Deactivated "gh"');
+      expect(result.content[0].text).toContain('Unloaded "gh"');
       expect(priv.connections.has("gh")).toBe(false);
       expect(priv.idleCallCounts.has("gh")).toBe(false);
       expect(disconnectFromUpstream).toHaveBeenCalledWith(conn);
@@ -463,7 +463,7 @@ describe("ConnectServer", () => {
     it("returns empty message when no connections", () => {
       const priv = getPrivate(server);
       const result = priv.handleHealth();
-      expect(result.content[0].text).toContain("No active connections");
+      expect(result.content[0].text).toContain("No servers loaded in this session");
     });
 
     it("shows health stats for active connections", () => {
@@ -503,13 +503,13 @@ describe("ConnectServer", () => {
       const priv = getPrivate(server);
       priv.config = makeConfig([]);
       const result = await priv.handleToolCall("mcp_connect_discover", {});
-      expect(result.content[0].text).toContain("No servers configured");
+      expect(result.content[0].text).toContain("No servers installed");
     });
 
     it("routes meta-tool health", async () => {
       const priv = getPrivate(server);
       const result = await priv.handleToolCall("mcp_connect_health", {});
-      expect(result.content[0].text).toContain("No active connections");
+      expect(result.content[0].text).toContain("No servers loaded in this session");
     });
 
     it("routes meta-tool activate", async () => {
@@ -519,14 +519,14 @@ describe("ConnectServer", () => {
       vi.mocked(connectToUpstream).mockResolvedValueOnce(conn);
 
       const result = await priv.handleToolCall("mcp_connect_activate", { server: "gh" });
-      expect(result.content[0].text).toContain('Activated "gh"');
+      expect(result.content[0].text).toContain('Loaded "gh"');
     });
 
     it("routes meta-tool deactivate", async () => {
       const priv = getPrivate(server);
       priv.connections.set("gh", makeConnection("gh"));
       const result = await priv.handleToolCall("mcp_connect_deactivate", { server: "gh" });
-      expect(result.content[0].text).toContain('Deactivated "gh"');
+      expect(result.content[0].text).toContain('Unloaded "gh"');
     });
 
     it("routes upstream tool calls and tracks health", async () => {
@@ -639,7 +639,7 @@ describe("ConnectServer", () => {
 
       const result = await priv.handleToolCall("gh_create_issue", {});
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("could not be activated");
+      expect(result.content[0].text).toContain("could not be loaded");
     });
 
     it("records successful proxied calls into the pack detector", async () => {

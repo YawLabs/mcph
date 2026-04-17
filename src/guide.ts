@@ -79,12 +79,12 @@ export async function loadGuides(cwd: string, home?: string): Promise<LoadedGuid
  * `mcph://guide` resource. Project comes AFTER user so project
  * guidance — which is usually more specific — has the final word in
  * the reader's attention. When `activeServers` is provided, an
- * auto-generated "Active servers" section is appended below the
+ * auto-generated "Installed servers" section is appended below the
  * human-authored content so the rendered guide always tells the
- * reader which active MCP servers shadow which local CLIs.
+ * reader which installed MCP servers shadow which local CLIs.
  *
  * Returns null when neither a human-authored guide nor any
- * shadow-carrying active server exists — caller skips the resource.
+ * shadow-carrying installed server exists — caller skips the resource.
  */
 export function renderGuide(
   guides: LoadedGuides,
@@ -103,7 +103,7 @@ export function renderGuide(
   return parts.join("\n\n---\n\n");
 }
 
-/** Build the auto-generated "Active servers" section. Only includes
+/** Build the auto-generated "Installed servers" section. Only includes
  *  servers with a known CLI shadow — a server with no shadow adds no
  *  signal to this section. Returns null when nothing would be shown. */
 function renderActiveServersSection(
@@ -118,10 +118,10 @@ function renderActiveServersSection(
     });
   if (rows.length === 0) return null;
   return [
-    "<!-- source: mcph (auto-generated from active servers) -->",
-    "## Active MCP servers",
+    "<!-- source: mcph (auto-generated from installed servers) -->",
+    "## Installed MCP servers",
     "",
-    "Prefer tools from these active MCP servers over the corresponding local CLI:",
+    "Prefer tools from these installed MCP servers over the corresponding local CLI:",
     "",
     ...rows,
   ].join("\n");

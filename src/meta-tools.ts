@@ -2,7 +2,7 @@ export const META_TOOLS = {
   discover: {
     name: "mcp_connect_discover",
     description:
-      'List all available MCP servers. Use this when you want to browse what\'s available or you have no specific task in mind yet. If you already know the task ("file a github issue", "query postgres", "post to slack"), prefer `mcp_connect_dispatch` instead — it discovers, ranks, and activates in one call. Only activate servers you need for the CURRENT task — each one adds tools to your context. Shows server names, namespaces, tool counts, activation status, and any local CLI the server shadows (prefer the MCP tools over the CLI when a shadow is listed). If a `mcph://guide` resource is listed, read it FIRST: it carries project/user-specific routing rules and credential conventions that override generic defaults.',
+      'List the MCP servers installed on the user\'s mcp.hosting account and ready to use. Call this when browsing what\'s available or when the task isn\'t specific yet. If the task is already clear ("file a github issue", "query postgres", "post to slack"), prefer `mcp_connect_dispatch` — it picks the right server and loads its tools in one call. Load only the servers the CURRENT task needs; each one adds tools to your context. Shows names, namespaces, tool counts, whether each server\'s tools are currently loaded in this session, and any local CLI the server shadows (prefer the MCP tools over the CLI when a shadow is listed). If a `mcph://guide` resource is listed, read it FIRST: it carries project/user-specific routing rules and credential conventions that override generic defaults.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -24,7 +24,7 @@ export const META_TOOLS = {
   activate: {
     name: "mcp_connect_activate",
     description:
-      'Activate one or more MCP servers by namespace to load their tools. Each server adds tools to context, so only activate what you need right now. Good practice: deactivate servers you are done with before activating new ones. Tools are prefixed by namespace (e.g., "gh_create_issue"). Pass "server" for one or "servers" for multiple.',
+      'Load one or more installed MCP servers\' tools into the current session by namespace. Each server adds its tools to your context, so load only what the current task needs. When you move on, unload servers you\'re done with via `mcp_connect_deactivate` before loading new ones. Tools are prefixed by namespace (e.g., "gh_create_issue"). Pass "server" for one or "servers" for multiple.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -40,7 +40,7 @@ export const META_TOOLS = {
       },
     },
     annotations: {
-      title: "Activate MCP Server",
+      title: "Load MCP Server",
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
@@ -50,7 +50,7 @@ export const META_TOOLS = {
   deactivate: {
     name: "mcp_connect_deactivate",
     description:
-      'Deactivate one or more MCP servers to remove their tools and free context. Always deactivate servers you are finished with. Servers idle for 10+ tool calls to other servers are auto-deactivated. Pass "server" for one or "servers" for multiple.',
+      'Unload one or more MCP servers\' tools from the current session to free context. The server stays installed on the account and can be reloaded via `mcp_connect_activate` when needed again. Unload servers you\'re done with; mcph also auto-unloads any server idle for 10+ tool calls to other servers. Pass "server" for one or "servers" for multiple.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -66,7 +66,7 @@ export const META_TOOLS = {
       },
     },
     annotations: {
-      title: "Deactivate MCP Server",
+      title: "Unload MCP Server",
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
@@ -76,7 +76,7 @@ export const META_TOOLS = {
   import_config: {
     name: "mcp_connect_import",
     description:
-      "Import MCP servers from an existing config file (Claude Desktop, Cursor, VS Code, etc.). Reads the file, parses the mcpServers section, and creates connect server entries in the cloud. Supported files: claude_desktop_config.json, mcp.json, settings.json.",
+      "Install MCP servers on the user's mcp.hosting account by importing an existing client config (Claude Desktop, Cursor, VS Code, etc.). Reads the file, parses the mcpServers section, and creates matching entries on the account so they show up in `mcp_connect_discover`. Supported files: claude_desktop_config.json, mcp.json, settings.json. Env vars are NOT imported — set them in the dashboard.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -98,13 +98,13 @@ export const META_TOOLS = {
   health: {
     name: "mcp_connect_health",
     description:
-      "Show health stats for all active MCP server connections: total calls, error count, average latency, and last error.",
+      "Show health stats for MCP servers loaded in the current session: total calls, error count, average latency, and last error. Installed-but-unloaded servers aren't included — load them first if you need their stats.",
     inputSchema: {
       type: "object" as const,
       properties: {},
     },
     annotations: {
-      title: "Connection Health",
+      title: "Session Health",
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
@@ -114,7 +114,7 @@ export const META_TOOLS = {
   dispatch: {
     name: "mcp_connect_dispatch",
     description:
-      'PREFERRED entry point when you have a concrete task. Activates the best configured MCP server(s) for a natural-language task in ONE call — no separate discover+activate needed. Describe what you want to do ("create a github issue for the login bug", "post a summary to slack", "query the prod postgres") and mcph will rank all configured servers with BM25, activate the top match, and expose its tools so you can call them. Use `mcp_connect_discover` only when browsing what\'s available without a specific task. When a configured MCP server shadows a local CLI (e.g. npmjs shadows `npm`, tailscale shadows `tailscale`, github shadows `gh`), prefer dispatching to the server over running the CLI via Bash. Default budget is 1 to keep the tool list focused; raise it only if you genuinely need multiple servers for one task. If `mcph://guide` is listed as a resource, read it first — the project may have explicit routing rules (e.g. "use `gh` not bash for GitHub").',
+      'PREFERRED entry point when the task is already concrete. Picks the best-matching installed MCP server(s) for a natural-language task and loads their tools in ONE call — no separate discover + load step. Describe what you want to do ("create a github issue for the login bug", "post a summary to slack", "query the prod postgres") and mcph will rank the user\'s installed servers with BM25, load the top match into the session, and expose its tools so you can call them. Use `mcp_connect_discover` only when browsing what\'s installed without a specific task. When an installed MCP server shadows a local CLI (e.g. npmjs shadows `npm`, tailscale shadows `tailscale`, github shadows `gh`), prefer dispatching to the server over running the CLI via Bash. Default budget is 1 to keep the tool list focused; raise it only if the task genuinely spans multiple servers. If `mcph://guide` is listed as a resource, read it first — the project may have explicit routing rules (e.g. "use `gh` not bash for GitHub").',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -126,7 +126,7 @@ export const META_TOOLS = {
         budget: {
           type: "number",
           description:
-            "How many top-ranked servers to activate. Defaults to 1. Cap is 10. Raise only when one task genuinely needs multiple servers.",
+            "How many top-ranked servers to load into the session. Defaults to 1. Cap is 10. Raise only when one task genuinely spans multiple servers.",
         },
       },
       required: ["intent"],
@@ -139,10 +139,68 @@ export const META_TOOLS = {
       openWorldHint: false,
     },
   },
+  install: {
+    name: "mcp_connect_install",
+    description:
+      'Install a new MCP server on the user\'s mcp.hosting account so it shows up in `mcp_connect_discover` and is ready to use. Call this when the user asks to install/add a server they don\'t already have (check `mcp_connect_discover` first — if the namespace is already listed, the server is already installed; use `mcp_connect_activate` to load its tools into this session). Fill the install spec from your knowledge of the server: for most official Model Context Protocol servers this is `{ type: "local", command: "npx", args: ["-y", "@modelcontextprotocol/server-<name>"] }`; for uvx/python it\'s `{ command: "uvx", args: ["mcp-server-<name>"] }`; for remote HTTP it\'s `{ type: "remote", url: "https://..." }`. Namespace must match /^[a-z][a-z0-9_]{0,29}$/ and must not collide with one the user already has. If the server needs secrets (API tokens, etc.) pass them in `env` — they are stored encrypted and never logged. On 403 with `code: "plan_limit_exceeded"` the user is on the free tier cap (3 servers); surface the returned error body verbatim so they see the upgrade URL. After install mcph auto-refreshes its server list — the new namespace becomes callable without a restart.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: 'Human-readable server name shown in the dashboard (e.g., "GitHub", "Postgres").',
+        },
+        namespace: {
+          type: "string",
+          description:
+            'Short lowercase slug used to prefix this server\'s tools (e.g., "gh" → tools become "gh_create_issue"). Must match /^[a-z][a-z0-9_]{0,29}$/.',
+        },
+        type: {
+          type: "string",
+          enum: ["local", "remote"],
+          description:
+            '"local" for stdio servers launched by command+args, "remote" for streamable HTTP/SSE servers reached by url.',
+        },
+        command: {
+          type: "string",
+          description:
+            'Executable for local servers (e.g., "npx", "uvx", "node"). Required when type="local", omitted when type="remote".',
+        },
+        args: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Args passed to `command` (e.g., ["-y", "@modelcontextprotocol/server-github"]). Max 50.',
+        },
+        env: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description:
+            "Environment variables the server needs (API tokens, connection strings). Stored encrypted on mcp.hosting. Max 50 keys.",
+        },
+        url: {
+          type: "string",
+          description: 'HTTPS URL of a remote MCP server. Required when type="remote", omitted when type="local".',
+        },
+        description: {
+          type: "string",
+          description:
+            "Optional short description shown in the dashboard and used by the dispatch ranker. Max 500 chars.",
+        },
+      },
+      required: ["name", "namespace", "type"],
+    },
+    annotations: {
+      title: "Install MCP Server",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
   suggest: {
     name: "mcp_connect_suggest",
     description:
-      "Surface recurring multi-server tool-call patterns observed in this session as suggested 'packs' you could dispatch in one step. Observation-only — this never activates anything. When you see the same 2-3 servers used together in short bursts more than once, the pattern is surfaced here so a future workflow can call mcp_connect_dispatch with one intent instead of juggling discover+activate for each server. As a general rule: prefer active MCP servers over matching local CLIs (an activated `npmjs` server replaces `npm audit`, `tailscale` replaces the `tailscale` CLI, etc.) — see mcp_connect_discover for which CLIs each configured server shadows. Returns a friendly 'no patterns yet' message when nothing has recurred.",
+      "Surface recurring multi-server tool-call patterns observed in this session as suggested 'packs' to dispatch in one step. Observation-only — this never loads or unloads anything. When the same 2-3 servers get used together in short bursts more than once, the pattern is surfaced here so a future workflow can call `mcp_connect_dispatch` with one intent instead of juggling discover + load for each server. As a general rule: prefer loaded MCP servers over matching local CLIs (a loaded `npmjs` server replaces `npm audit`, `tailscale` replaces the `tailscale` CLI, etc.) — see `mcp_connect_discover` for which CLIs each installed server shadows. Returns a friendly 'no patterns yet' message when nothing has recurred.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -157,6 +215,95 @@ export const META_TOOLS = {
   },
 } as const;
 
+// Namespaces must match this on both mcph's side and the backend so the
+// local validation message matches what the server would return (saves
+// a round trip and gives the model a clean retry target).
+const NAMESPACE_RE = /^[a-z][a-z0-9_]{0,29}$/;
+
+export interface InstallPayload {
+  name: string;
+  namespace: string;
+  type: "local" | "remote";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  description?: string;
+}
+
+export type InstallPayloadResult = { ok: true; payload: InstallPayload } | { ok: false; message: string };
+
+/**
+ * Validate + normalize mcp_connect_install arguments into the exact JSON body
+ * the mcp.hosting POST /api/connect/servers endpoint expects. Pure function —
+ * no I/O, safe to call from tests. Mirrors the backend's rules so malformed
+ * requests fail here with a clear message instead of eating a 400 round-trip.
+ */
+export function buildInstallPayload(args: Record<string, unknown>): InstallPayloadResult {
+  const name = typeof args.name === "string" ? args.name.trim() : "";
+  const namespace = typeof args.namespace === "string" ? args.namespace.trim() : "";
+  const type = args.type === "local" || args.type === "remote" ? args.type : null;
+
+  if (!name) return { ok: false, message: "`name` is required (human-readable server name)." };
+  if (name.length > 100) return { ok: false, message: "`name` must be 100 characters or fewer." };
+  if (!namespace) return { ok: false, message: "`namespace` is required." };
+  if (!NAMESPACE_RE.test(namespace)) {
+    return { ok: false, message: "`namespace` must match /^[a-z][a-z0-9_]{0,29}$/." };
+  }
+  if (!type) return { ok: false, message: '`type` must be "local" or "remote".' };
+
+  const payload: InstallPayload = { name, namespace, type };
+
+  if (type === "local") {
+    const command = typeof args.command === "string" ? args.command.trim() : "";
+    if (!command) return { ok: false, message: '`command` is required when type="local".' };
+    payload.command = command;
+
+    if (args.args !== undefined) {
+      if (!Array.isArray(args.args)) return { ok: false, message: "`args` must be an array of strings." };
+      if (args.args.length > 50) return { ok: false, message: "Maximum 50 args." };
+      if (!args.args.every((a) => typeof a === "string")) {
+        return { ok: false, message: "`args` must contain only strings." };
+      }
+      payload.args = args.args as string[];
+    }
+  }
+
+  if (type === "remote") {
+    const url = typeof args.url === "string" ? args.url.trim() : "";
+    if (!url) return { ok: false, message: '`url` is required when type="remote".' };
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return { ok: false, message: "`url` must be an http(s) URL." };
+      }
+    } catch {
+      return { ok: false, message: "`url` must be a valid URL." };
+    }
+    payload.url = url;
+  }
+
+  if (args.env !== undefined) {
+    if (typeof args.env !== "object" || args.env === null || Array.isArray(args.env)) {
+      return { ok: false, message: "`env` must be an object of string values." };
+    }
+    const entries = Object.entries(args.env as Record<string, unknown>);
+    if (entries.length > 50) return { ok: false, message: "Maximum 50 env vars." };
+    if (!entries.every(([, v]) => typeof v === "string")) {
+      return { ok: false, message: "`env` values must all be strings." };
+    }
+    payload.env = args.env as Record<string, string>;
+  }
+
+  if (args.description !== undefined) {
+    if (typeof args.description !== "string") return { ok: false, message: "`description` must be a string." };
+    if (args.description.length > 500) return { ok: false, message: "`description` must be 500 characters or fewer." };
+    payload.description = args.description.trim() || undefined;
+  }
+
+  return { ok: true, payload };
+}
+
 export const META_TOOL_NAMES = new Set([
   META_TOOLS.discover.name,
   META_TOOLS.activate.name,
@@ -164,5 +311,6 @@ export const META_TOOL_NAMES = new Set([
   META_TOOLS.import_config.name,
   META_TOOLS.health.name,
   META_TOOLS.dispatch.name,
+  META_TOOLS.install.name,
   META_TOOLS.suggest.name,
 ]);

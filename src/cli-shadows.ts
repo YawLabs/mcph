@@ -2,7 +2,7 @@
 //
 // Used by:
 //   - discover: surface "this server shadows `<cli>`" per candidate
-//   - guide: auto-generated "Active servers" section appended to MCPH.md
+//   - guide: auto-generated "Installed servers" section appended to MCPH.md
 //   - doctor: scan shell history for shadowed-CLI invocations
 //
 // Covers every slug in the mcp.hosting Explore catalog so a user who

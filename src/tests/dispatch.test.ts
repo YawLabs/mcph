@@ -116,10 +116,10 @@ describe("handleDispatch", () => {
     priv.config = { configVersion: "v1", servers: [] };
     const result = await priv.handleDispatch("do something", 1);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("No servers configured");
+    expect(result.content[0].text).toContain("No servers installed");
   });
 
-  it("errors when no configured server matches the intent", async () => {
+  it("errors when no installed server matches the intent", async () => {
     const priv = getPrivate(server);
     priv.config = {
       configVersion: "v1",
@@ -127,7 +127,7 @@ describe("handleDispatch", () => {
     };
     const result = await priv.handleDispatch("xylophone orchestration", 1);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/No configured server matches/);
+    expect(result.content[0].text).toMatch(/No installed server matches/);
   });
 
   it("activates only the top 1 by default", async () => {
@@ -154,7 +154,7 @@ describe("handleDispatch", () => {
     expect(result.isError).toBeUndefined();
     expect(vi.mocked(connectToUpstream)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(connectToUpstream).mock.calls[0][0].namespace).toBe("gh");
-    expect(result.content[0].text).toContain('Activated "gh"');
+    expect(result.content[0].text).toContain('Loaded "gh"');
   });
 
   it("respects a budget larger than 1", async () => {
@@ -254,7 +254,7 @@ describe("handleDispatch", () => {
 
     const result = await priv.handleDispatch("github issue", 1);
     expect(vi.mocked(connectToUpstream)).not.toHaveBeenCalled();
-    expect(result.content[0].text).toContain("already active");
+    expect(result.content[0].text).toContain("already loaded");
   });
 });
 
@@ -296,7 +296,7 @@ describe("handleDiscoverWithAutoWarm", () => {
     const result = await priv.handleDiscoverWithAutoWarm("file a github issue");
     expect(vi.mocked(connectToUpstream)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(connectToUpstream).mock.calls[0][0].namespace).toBe("gh");
-    expect(result.content[0].text).toContain('Auto-activated "gh"');
+    expect(result.content[0].text).toContain('Auto-loaded "gh"');
   });
 
   it("does not auto-activate when no context is provided", async () => {

@@ -22,7 +22,7 @@ import { ACTIVATION_FAILURE_TTL_MS, type ActivationFailure, healthFactor } from 
 import { HISTORY_LIMIT, type ToolCallRecord, adaptiveThreshold, pushToolCall } from "./idle-ttl.js";
 import { LearningStore } from "./learning.js";
 import { log } from "./logger.js";
-import { META_TOOLS, META_TOOL_NAMES } from "./meta-tools.js";
+import { META_TOOLS, META_TOOL_NAMES, buildInstallPayload } from "./meta-tools.js";
 import { PackDetector } from "./pack-detect.js";
 import { type ProgressReporter, createProgressReporter } from "./progress.js";
 import {
@@ -512,6 +512,17 @@ export class ConnectServer {
       });
       return this.attachGuideNudge(result);
     }
+    if (name === META_TOOLS.install.name) {
+      const result = await this.handleInstall(args);
+      recordConnectEvent({
+        namespace: typeof args.namespace === "string" ? args.namespace : null,
+        toolName: null,
+        action: "install",
+        latencyMs: null,
+        success: !result.isError,
+      });
+      return this.attachGuideNudge(result);
+    }
     if (name === META_TOOLS.health.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "health", latencyMs: null, success: true });
       return this.attachGuideNudge(this.handleHealth());
@@ -538,14 +549,14 @@ export class ConnectServer {
     // the fresh routes. activateOne dedupes concurrent activations and
     // handles elicitation + retries.
     if (route?.deferred) {
-      progress?.(`Activating "${route.namespace}" on first tools/call…`);
+      progress?.(`Loading "${route.namespace}" on first tools/call…`);
       const activation = await this.activateOne(route.namespace, progress);
       if (!activation.ok) {
         return {
           content: [
             {
               type: "text",
-              text: `Server "${route.namespace}" could not be activated on first call: ${activation.message}`,
+              text: `Server "${route.namespace}" could not be loaded on first call: ${activation.message}`,
             },
           ],
           isError: true,
@@ -565,7 +576,7 @@ export class ConnectServer {
           content: [
             {
               type: "text",
-              text: `Tool "${name}" is no longer available after activating "${activation.serverId ? activation.serverId : name}" — the upstream's tool set changed. Call mcp_connect_discover to see current tools.`,
+              text: `Tool "${name}" is no longer available after loading "${activation.serverId ? activation.serverId : name}" — the upstream's tool set changed. Call mcp_connect_discover to see current tools.`,
             },
           ],
           isError: true,
@@ -612,7 +623,7 @@ export class ConnectServer {
               content: [
                 {
                   type: "text",
-                  text: `Server "${route.namespace}" disconnected and auto-reconnect failed: ${lastErr.message}. Use mcp_connect_activate with server "${route.namespace}" to manually reconnect.`,
+                  text: `Server "${route.namespace}" disconnected and auto-reconnect failed: ${lastErr.message}. Use mcp_connect_activate with server "${route.namespace}" to reload it manually.`,
                 },
               ],
               isError: true,
@@ -849,7 +860,7 @@ export class ConnectServer {
         content: [
           {
             type: "text",
-            text: "No servers configured. Add servers at mcp.hosting to get started.",
+            text: "No servers installed. Add servers at mcp.hosting to get started.",
           },
         ],
       };
@@ -879,9 +890,9 @@ export class ConnectServer {
       sorted = activeServers;
     }
 
-    const lines: string[] = [context ? "Servers ranked by relevance:\n" : "Available MCP servers:\n"];
+    const lines: string[] = [context ? "Servers ranked by relevance:\n" : "Installed MCP servers:\n"];
     if (autoWarmed && sorted.length > 0) {
-      lines.push(`Auto-activated "${sorted[0].namespace}" — top match for your query.\n`);
+      lines.push(`Auto-loaded "${sorted[0].namespace}" — top match for your query.\n`);
     }
 
     // Compact "Matches your query" summary. Prepended when context is
@@ -911,8 +922,8 @@ export class ConnectServer {
       const status = connection
         ? connection.status === "error"
           ? "ERROR (disconnected, will auto-reconnect on use)"
-          : `ACTIVE (${connection.tools.length} tools)`
-        : "available";
+          : `loaded (${connection.tools.length} tools)`
+        : "ready";
 
       const score = scores.get(server.namespace);
       const relevance = score && score > 0 ? ` (relevance: ${score.toFixed(2)})` : "";
@@ -942,11 +953,11 @@ export class ConnectServer {
 
     const activeCount = this.connections.size;
     const totalTools = Array.from(this.connections.values()).reduce((sum, c) => sum + c.tools.length, 0);
-    lines.push(`\n${activeCount} active, ${totalTools} tools loaded.`);
+    lines.push(`\n${activeCount} loaded in this session, ${totalTools} tools in context.`);
     lines.push(
       context
-        ? "Use mcp_connect_dispatch(intent) to activate the best server in one step, or mcp_connect_activate to pick explicitly."
-        : "Use mcp_connect_activate to activate a server by its namespace.",
+        ? "Use mcp_connect_dispatch(intent) to load the best server in one step, or mcp_connect_activate to pick explicitly."
+        : "Use mcp_connect_activate to load a server's tools by namespace.",
     );
 
     return { content: [{ type: "text", text: lines.join("\n") }] };
@@ -972,7 +983,7 @@ export class ConnectServer {
   ): Promise<{ ok: boolean; message: string; isChanged: boolean; serverId?: string }> {
     const inflight = this.activationInflight.get(namespace);
     if (inflight) {
-      progress?.(`"${namespace}" activation already in flight — awaiting existing attempt`);
+      progress?.(`"${namespace}" load already in flight — awaiting existing attempt`);
       return inflight;
     }
     const promise = this.runActivateOne(namespace, progress).finally(() => {
@@ -993,11 +1004,11 @@ export class ConnectServer {
   ): Promise<{ ok: boolean; message: string; isChanged: boolean; serverId?: string }> {
     const existing = this.connections.get(namespace);
     if (existing && existing.status === "connected") {
-      progress?.(`"${namespace}" already active`);
+      progress?.(`"${namespace}" already loaded`);
       return {
         ok: true,
         isChanged: false,
-        message: `"${namespace}" is already active with ${existing.tools.length} tools.`,
+        message: `"${namespace}" is already loaded with ${existing.tools.length} tools.`,
         serverId: existing.config.id,
       };
     }
@@ -1053,7 +1064,7 @@ export class ConnectServer {
           ok: true,
           isChanged: true,
           serverId: serverConfig.id,
-          message: `Activated "${namespace}" — ${connection.tools.length} tools: ${toolNames}`,
+          message: `Loaded "${namespace}" — ${connection.tools.length} tools: ${toolNames}`,
         };
       } catch (err) {
         lastError = err;
@@ -1091,8 +1102,8 @@ export class ConnectServer {
     // hint) over the raw SDK error. Falls back cleanly for transport errors.
     const message =
       lastError instanceof ActivationError
-        ? `Failed to activate "${namespace}": ${lastError.message}`
-        : `Failed to activate "${namespace}": ${lastError instanceof Error ? lastError.message : String(lastError)}`;
+        ? `Failed to load "${namespace}": ${lastError.message}`
+        : `Failed to load "${namespace}": ${lastError instanceof Error ? lastError.message : String(lastError)}`;
     return { ok: false, isChanged: false, message };
   }
 
@@ -1172,7 +1183,7 @@ export class ConnectServer {
     if (Object.keys(values).length === 0) return null;
 
     this.elicitedEnv.set(namespace, { ...alreadyElicited, ...values });
-    progress?.("Got credentials — retrying activation");
+    progress?.("Got credentials — retrying load");
     // Recurse — runActivateOne merges elicitedEnv on this attempt.
     // Call runActivateOne directly (not activateOne) because we're
     // already inside the in-flight activation promise registered by
@@ -1188,7 +1199,7 @@ export class ConnectServer {
     if (namespaces.length === 0) {
       return {
         content: [
-          { type: "text", text: "server namespace is required. Use mcp_connect_discover to see available servers." },
+          { type: "text", text: "server namespace is required. Use mcp_connect_discover to see installed servers." },
         ],
         isError: true,
       };
@@ -1202,7 +1213,7 @@ export class ConnectServer {
     let i = 0;
     for (const namespace of namespaces) {
       i += 1;
-      progress?.(`Activating ${namespace} (${i}/${total})`, i - 1, total);
+      progress?.(`Loading ${namespace} (${i}/${total})`, i - 1, total);
       const r = await this.activateOne(namespace, progress);
       results.push(r.message);
       if (r.isChanged) anyChanged = true;
@@ -1247,7 +1258,7 @@ export class ConnectServer {
     }
     if (!this.config || this.config.servers.length === 0) {
       return {
-        content: [{ type: "text", text: "No servers configured. Add servers at mcp.hosting to get started." }],
+        content: [{ type: "text", text: "No servers installed. Add servers at mcp.hosting to get started." }],
         isError: true,
       };
     }
@@ -1292,7 +1303,7 @@ export class ConnectServer {
         content: [
           {
             type: "text",
-            text: `No configured server matches "${trimmed}". Use mcp_connect_discover to see what's available, or add a relevant server at mcp.hosting.`,
+            text: `No installed server matches "${trimmed}". Use mcp_connect_discover to see what's installed, or add a relevant server at mcp.hosting.`,
           },
         ],
         isError: true,
@@ -1332,7 +1343,7 @@ export class ConnectServer {
     let i = 0;
     for (const winner of winners) {
       i += 1;
-      progress?.(`Activating ${winner.namespace} (${i}/${winners.length})`, i - 1, winners.length);
+      progress?.(`Loading ${winner.namespace} (${i}/${winners.length})`, i - 1, winners.length);
       const r = await this.activateOne(winner.namespace, progress);
       results.push(`${winner.namespace} (score ${winner.score.toFixed(2)}): ${r.message}`);
       if (r.isChanged) anyChanged = true;
@@ -1352,7 +1363,7 @@ export class ConnectServer {
       await this.notifyAllListsChanged();
     }
 
-    const header = `Dispatched "${trimmed}" — activated top ${winners.length} of ${ranked.length} matching server${ranked.length === 1 ? "" : "s"}.\n`;
+    const header = `Dispatched "${trimmed}" — loaded top ${winners.length} of ${ranked.length} matching server${ranked.length === 1 ? "" : "s"}.\n`;
     return {
       content: [{ type: "text", text: header + results.join("\n") }],
       isError: anyError && !anyChanged ? true : undefined,
@@ -1375,7 +1386,7 @@ export class ConnectServer {
     for (const namespace of namespaces) {
       const connection = this.connections.get(namespace);
       if (!connection) {
-        results.push(`"${namespace}" is not active.`);
+        results.push(`"${namespace}" wasn't loaded.`);
         continue;
       }
 
@@ -1384,7 +1395,7 @@ export class ConnectServer {
       this.idleCallCounts.delete(namespace);
       this.adaptiveSkipLogged.delete(namespace);
       anyChanged = true;
-      results.push(`Deactivated "${namespace}". Tools removed.`);
+      results.push(`Unloaded "${namespace}". Tools removed from context.`);
     }
 
     if (anyChanged) {
@@ -1722,6 +1733,95 @@ export class ConnectServer {
     }
   }
 
+  // Install a new MCP server on the user's mcp.hosting account. Validates
+  // via the shared buildInstallPayload helper so local/remote + namespace
+  // shape errors fail here with a clear message instead of burning a
+  // round-trip to the backend. On 403 plan-limit we forward the structured
+  // error body verbatim (JSON) — the model surfaces that to the user so
+  // the upgrade URL is visible in chat. On 201 we force a config refetch
+  // so `discover` sees the new namespace without waiting for the 60s
+  // poll.
+  private async handleInstall(
+    args: Record<string, unknown>,
+  ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+    const built = buildInstallPayload(args);
+    if (!built.ok) {
+      return { content: [{ type: "text", text: built.message }], isError: true };
+    }
+    const payload = built.payload;
+
+    try {
+      const res = await request(`${this.apiUrl.replace(/\/$/, "")}/api/connect/servers`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        headersTimeout: 15_000,
+        bodyTimeout: 15_000,
+      });
+
+      let body: any;
+      try {
+        body = await res.body.json();
+      } catch {
+        body = {};
+      }
+
+      // Plan-cap: forward the backend's structured body so the model can
+      // render the upgrade URL. Returning the JSON verbatim is the
+      // load-bearing bit of the mcph install-tool contract — see
+      // buildPlanLimitExceededError in mcp-hosting/src/lib/plans.ts.
+      if (res.statusCode === 403 && body && body.code === "plan_limit_exceeded") {
+        return {
+          content: [{ type: "text", text: JSON.stringify(body, null, 2) }],
+          isError: true,
+        };
+      }
+
+      if (res.statusCode === 409) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Namespace "${payload.namespace}" is already installed. Use mcp_connect_activate to load its tools, or pick a different namespace.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (res.statusCode >= 400) {
+        return {
+          content: [{ type: "text", text: `Install failed: ${body.error || `HTTP ${res.statusCode}`}` }],
+          isError: true,
+        };
+      }
+
+      // Refresh config so the new server shows up in discover immediately.
+      // Best-effort — failure just means the next 60s poll will catch it.
+      await this.fetchAndApplyConfig().catch((err: Error) =>
+        log("warn", "Post-install config refresh failed", { error: err?.message }),
+      );
+
+      const nextStep =
+        payload.type === "local"
+          ? `Call mcp_connect_activate with namespace "${payload.namespace}" to load its tools into this session.`
+          : `Call mcp_connect_activate with namespace "${payload.namespace}" to load its tools.`;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Installed "${payload.name}" (namespace "${payload.namespace}"). ${nextStep}`,
+          },
+        ],
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text", text: `Install error: ${err.message}` }], isError: true };
+    }
+  }
+
   private handleHealth(): { content: Array<{ type: string; text: string }> } {
     const lines: string[] = [];
     if (this.profile) {
@@ -1742,11 +1842,11 @@ export class ConnectServer {
     }
 
     if (this.connections.size === 0) {
-      lines.push("No active connections.");
+      lines.push("No servers loaded in this session yet.");
       return { content: [{ type: "text", text: lines.join("\n") }] };
     }
 
-    lines.push("Connection health:\n");
+    lines.push("Session health:\n");
 
     for (const [namespace, conn] of this.connections) {
       const h = conn.health;
@@ -1760,7 +1860,7 @@ export class ConnectServer {
       lines.push(`    tools: ${conn.tools.length} — ${toolNames}`);
       lines.push(`    calls: ${h.totalCalls}, errors: ${h.errorCount} (${errorRate}%)`);
       lines.push(`    avg latency: ${avgLatency}ms`);
-      lines.push(`    idle: ${idleCount}/${idleLimit} until auto-deactivate`);
+      lines.push(`    idle: ${idleCount}/${idleLimit} until auto-unload`);
       if (h.lastErrorMessage) {
         lines.push(`    last error: ${h.lastErrorMessage} at ${h.lastErrorAt}`);
       }
@@ -1803,7 +1903,7 @@ export class ConnectServer {
       lines.push(`  {${nsList}} — seen ${pack.frequency} times (last ${secondsAgo}s ago)`);
     }
     lines.push(
-      "\nTo activate a pack in one step next time, call mcp_connect_dispatch with an intent that spans these servers.",
+      "\nTo load a pack in one step next time, call mcp_connect_dispatch with an intent that spans these servers.",
     );
 
     return { content: [{ type: "text", text: lines.join("\n") }] };

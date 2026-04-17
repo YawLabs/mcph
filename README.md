@@ -19,22 +19,23 @@ Your MCP client (Claude Code, Cursor, etc.)
 
 1. You add servers on [mcp.hosting](https://mcp.hosting) (name, command, args, env vars)
 2. mcph pulls your config on startup
-3. You use a handful of meta-tools to control which servers are active:
-   - **`mcp_connect_dispatch`** — describe a task in plain English; mcph picks the right server, activates it, and exposes its tools. The fast path when you know what you want.
-   - **`mcp_connect_discover`** — list all configured servers, optionally ranked by relevance to a context string. Auto-activates the top match when one server clearly wins.
-   - **`mcp_connect_activate`** — connect specific servers by namespace.
-   - **`mcp_connect_deactivate`** — disconnect and remove tools.
+3. You use a handful of meta-tools to control which servers' tools are loaded in the current session:
+   - **`mcp_connect_dispatch`** — describe a task in plain English; mcph picks the right server, loads its tools, and exposes them. The fast path when you know what you want.
+   - **`mcp_connect_discover`** — list all installed servers, optionally ranked by relevance to a context string. Auto-loads the top match when one server clearly wins.
+   - **`mcp_connect_activate`** — load specific servers' tools by namespace.
+   - **`mcp_connect_deactivate`** — unload a server and remove its tools from context.
+   - **`mcp_connect_install`** — install a new MCP server on your mcp.hosting account.
    - **`mcp_connect_import`** — bulk-import servers from an existing client config (`claude_desktop_config.json`, `mcp.json`, etc.).
-   - **`mcp_connect_health`** — show call counts, error rates, and latency per active connection.
+   - **`mcp_connect_health`** — show call counts, error rates, and latency per loaded server.
    - **`mcp_connect_suggest`** — surface recurring multi-server workflows mcph has watched in this session. When you repeatedly use `gh` → `linear` → `slack` for the same kind of task, `suggest` lists the pattern so you can dispatch it as one intent next time.
 
-Only activated servers load tools into context. This keeps your context window clean.
+Installing a server puts it on your account; loading it brings its tools into the current session's context. mcph loads servers lazily so your context window stays clean.
 
 Ranking is two-stage when the backend has a Voyage embeddings key configured: a local BM25 pass narrows to a shortlist, then a `/api/connect/rerank` call semantically reorders. With no key on the backend it gracefully degrades to BM25-only — `dispatch` and `discover(context)` keep working, just with slightly weaker ranking on ambiguous queries.
 
 On top of the ranker, mcph applies three session-local signals to dispatch scores:
 
-- **Health-aware**: servers that have recently failed to activate or have high error rates get down-ranked. Never boosts above raw — "all else equal, prefer the one that works".
+- **Health-aware**: servers that have recently failed to load or have high error rates get down-ranked. Never boosts above raw — "all else equal, prefer the one that works".
 - **Learning**: servers that have succeeded this session get a small (+10% max) nudge, so the router remembers what's been useful.
 - **Sampling tiebreak**: when the top two candidates are within 10% of each other and your client supports [MCP sampling](https://modelcontextprotocol.io/specification/server/sampling), mcph asks your client's LLM to pick. Uses the model you're already running — no extra provider key, no extra cost to mcph.
 
@@ -139,50 +140,50 @@ On [mcp.hosting](https://mcp.hosting), add each MCP server you want to orchestra
 
 ### Fast path — `dispatch`
 
-When you know what you want to do, skip the discover/activate dance:
+When you know what you want to do, skip the discover/load dance:
 
 ```
 > Create a GitHub issue for the login bug
 
 [mcp_connect_dispatch is called with intent="create a GitHub issue for the login bug"]
 
-Dispatched "create a GitHub issue for the login bug" — activated top 1 of 1 matching server.
-gh (score 4.32): Activated "gh" — 24 tools: gh_create_issue, gh_list_prs, ...
+Dispatched "create a GitHub issue for the login bug" — loaded top 1 of 1 matching server.
+gh (score 4.32): Loaded "gh" — 24 tools: gh_create_issue, gh_list_prs, ...
 
 [gh_create_issue is then called, returns the new issue]
 ```
 
-`dispatch` ranks every configured server, activates the top match, and immediately exposes its tools so the LLM can call them. Default budget is 1 (one server). For tasks that need multiple servers, pass `budget: 3` etc.
+`dispatch` ranks every installed server, loads the top match's tools, and immediately exposes them so the LLM can call them. Default budget is 1 (one server). For tasks that need multiple servers, pass `budget: 3` etc.
 
 ### Manual control
 
 ```
 > What MCP servers do I have?
 
-Available MCP servers:
+Installed MCP servers:
 
-  gh — GitHub [available] (local)
-  slack — Slack [available] (local)
-  stripe — Stripe [available] (local)
+  gh — GitHub [ready] (local)
+  slack — Slack [ready] (local)
+  stripe — Stripe [ready] (local)
 
-0 active, 0 tools loaded.
+0 loaded in this session, 0 tools in context.
 ```
 
 ```
-> Activate my GitHub server
+> Load my GitHub server
 
-Activated "gh" — 24 tools available: gh_create_issue, gh_list_prs, ...
+Loaded "gh" — 24 tools: gh_create_issue, gh_list_prs, ...
 ```
 
-You can activate multiple at once: `> Activate GitHub and Slack`. Tools are namespaced as `{namespace}_{original_tool_name}` to prevent collisions. The tool list updates automatically via `tools/list_changed`.
+You can load multiple at once: `> Load GitHub and Slack`. Tools are namespaced as `{namespace}_{original_tool_name}` to prevent collisions. The tool list updates automatically via `tools/list_changed`.
 
 ```
-> Deactivate GitHub when you're done
+> Unload GitHub when you're done
 
-Deactivated "gh". Tools removed.
+Unloaded "gh". Tools removed from context.
 ```
 
-Servers also auto-deactivate after ~10 tool calls to other servers, so context stays clean even if you forget. The threshold is adaptive per-namespace: a server that's been called in bursts recently gets more patience (up to +20) before it's deactivated, so heavily-used servers don't get torn down mid-task. Long-idle servers still deactivate at the baseline.
+Servers also auto-unload after ~10 tool calls to other servers, so context stays clean even if you forget. The threshold is adaptive per-namespace: a server that's been called in bursts recently gets more patience (up to +20) before it's unloaded, so heavily-used servers don't get torn down mid-task. Long-idle servers still unload at the baseline.
 
 ## `.mcph/` config directory
 
@@ -249,15 +250,15 @@ When both exist, the project guide is appended after the user guide with a `---`
 
 ## Elicitation for missing credentials
 
-When a server fails to start with stderr like `GITHUB_TOKEN is required` and your client advertises the MCP [elicitation](https://modelcontextprotocol.io/specification/server/elicitation) capability, mcph prompts you for the missing value inline and retries activation. Values stay in-memory for the current mcph session only — persist them in the mcp.hosting dashboard if you want them across restarts.
+When a server fails to start with stderr like `GITHUB_TOKEN is required` and your client advertises the MCP [elicitation](https://modelcontextprotocol.io/specification/server/elicitation) capability, mcph prompts you for the missing value inline and retries the load. Values stay in-memory for the current mcph session only — persist them in the mcp.hosting dashboard if you want them across restarts.
 
 ### Test from the dashboard
 
-The `/dashboard/connect` page in mcp.hosting has a **Test** button per server that probes activation through your running mcph and shows pass/fail inline — no LLM round-trip needed. Useful when you've just added a server and want to confirm the token works without prompting your AI.
+The `/dashboard/connect` page in mcp.hosting has a **Test** button per server that loads it through your running mcph and shows pass/fail inline — no LLM round-trip needed. Useful when you've just added a server and want to confirm the token works without prompting your AI.
 
 ### Errors come with deep-links
 
-When activation fails (missing token, runtime not on PATH, server crashes on init), mcph emits a message ending with `→ Edit at https://mcp.hosting/dashboard/connect#server-<id>`. Most LLMs render that as a clickable link, and the dashboard scrolls to and highlights the matching card so you find the right server in one click.
+When a load fails (missing token, runtime not on PATH, server crashes on init), mcph emits a message ending with `→ Edit at https://mcp.hosting/dashboard/connect#server-<id>`. Most LLMs render that as a clickable link, and the dashboard scrolls to and highlights the matching card so you find the right server in one click.
 
 ## Config sync
 
@@ -271,9 +272,9 @@ mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config change
 | `MCPH_URL` | No | API URL (default: `https://mcp.hosting`). Env wins over `apiBase` in `config.json`. |
 | `LOG_LEVEL` | No | Log verbosity: `debug`, `info`, `warn`, `error` (default: `info`) |
 | `MCPH_POLL_INTERVAL` | No | Config-poll interval in seconds. `0` disables polling (config fetched once at startup). Default: `60` |
-| `MCPH_AUTO_ACTIVATE` | No | When `discover` is called with a context string and one server clearly wins, auto-activate it. Set to `0` to disable. Default: enabled |
+| `MCPH_AUTO_ACTIVATE` | No | When `discover` is called with a context string and one server clearly wins, auto-load it. Set to `0` to disable. Default: enabled |
 | `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
-| `MCP_CONNECT_IDLE_THRESHOLD` | No | Baseline for idle auto-deactivate (default: `10`). The per-namespace adaptive cap is `[5, 50]` — bursty namespaces extend past the baseline, long-idle ones deactivate at it. |
+| `MCP_CONNECT_IDLE_THRESHOLD` | No | Baseline for idle auto-unload (default: `10`). The per-namespace adaptive cap is `[5, 50]` — bursty namespaces extend past the baseline, long-idle ones unload at it. |
 
 ## Runtime detection
 
@@ -283,7 +284,7 @@ The detection is best-effort: each probe has a 3-second timeout and missing runt
 
 ### Automatic `uv` bootstrap
 
-The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.) all launch via Astral's `uv`/`uvx`. mcph ships its own bootstrap for these: on first encounter with a `uv`/`uvx` command, if the binary isn't on your PATH, mcph lazily downloads Astral's standalone `uv` release, verifies the sha256, and caches it under the platform-appropriate cache dir. Subsequent activations reuse the cached binary. If you already have `uv` installed, mcph uses your version and never downloads.
+The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.) all launch via Astral's `uv`/`uvx`. mcph ships its own bootstrap for these: on first encounter with a `uv`/`uvx` command, if the binary isn't on your PATH, mcph lazily downloads Astral's standalone `uv` release, verifies the sha256, and caches it under the platform-appropriate cache dir. Subsequent loads reuse the cached binary. If you already have `uv` installed, mcph uses your version and never downloads.
 
 `uvx ARGS` is always rewritten to `uv tool run ARGS` at spawn time — so only `uv` needs to be reachable, not `uvx` separately. Fixes Windows setups where one was on PATH and the other wasn't.
 
