@@ -555,6 +555,45 @@ describe("ConnectServer", () => {
     });
   });
 
+  describe("discover usage hints", () => {
+    it("surfaces a success count from the learning store", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      // Three successful dispatches — enough for the hint to show.
+      priv.learning.recordSuccess("gh");
+      priv.learning.recordSuccess("gh");
+      priv.learning.recordSuccess("gh");
+
+      const result = await priv.handleToolCall("mcp_connect_discover", {});
+      expect(result.content[0].text).toContain("usage: used 3x this session");
+    });
+
+    it("surfaces co-usage peers from the pack detector", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([
+        makeServerConfig({ id: "1", namespace: "gh", name: "GitHub" }),
+        makeServerConfig({ id: "2", namespace: "linear", name: "Linear" }),
+      ]);
+      // Two bursts of (gh, linear) — enough for a detected pack.
+      const t0 = 1_000_000;
+      priv.packDetector.recordCall("gh", "create_issue", t0);
+      priv.packDetector.recordCall("linear", "list_issues", t0 + 1000);
+      priv.packDetector.recordCall("gh", "create_issue", t0 + 300_000);
+      priv.packDetector.recordCall("linear", "list_issues", t0 + 301_000);
+
+      const result = await priv.handleToolCall("mcp_connect_discover", {});
+      expect(result.content[0].text).toContain('often loaded with "linear"');
+      expect(result.content[0].text).toContain('often loaded with "gh"');
+    });
+
+    it("stays silent when neither signal has evidence", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      const result = await priv.handleToolCall("mcp_connect_discover", {});
+      expect(result.content[0].text).not.toContain("usage:");
+    });
+  });
+
   describe("concurrent server cap", () => {
     it("refuses a new activation when already at cap", async () => {
       const priv = getPrivate(server);

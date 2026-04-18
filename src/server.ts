@@ -57,6 +57,7 @@ import { initTestRunner, startTestRunner, stopTestRunner } from "./test-runner.j
 import { initToolReport, reportTools } from "./tool-report.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { ActivationError, connectToUpstream, disconnectFromUpstream } from "./upstream.js";
+import { buildCoUsageMap, formatUsageHint } from "./usage-hints.js";
 import { ensureUv } from "./uv-bootstrap.js";
 
 declare const __VERSION__: string;
@@ -1066,6 +1067,12 @@ export class ConnectServer {
       }
     }
 
+    // Precompute the co-usage map once per discover call. Derived from
+    // the PackDetector's current history — same signal `suggest` surfaces,
+    // but delivered inline so the LLM doesn't need a second meta-tool
+    // roundtrip to see "often used with X."
+    const coUsageMap = buildCoUsageMap(this.packDetector.detectChains());
+
     let totalContextTokens = 0;
     for (const server of sorted) {
       const connection = this.connections.get(server.namespace);
@@ -1104,6 +1111,12 @@ export class ConnectServer {
       // over per-call error rate (see formatHealthWarning).
       const warning = formatHealthWarning(connection?.health, this.activationFailures.get(server.namespace));
       if (warning) lines.push(`    ${warning}`);
+
+      // Inline usage hint — what succeeded in this session + who tends
+      // to get loaded alongside this server. Silent when neither signal
+      // has evidence yet. See usage-hints.ts.
+      const usageHint = formatUsageHint(this.learning.get(server.namespace), coUsageMap.get(server.namespace) ?? []);
+      if (usageHint) lines.push(`    ${usageHint}`);
 
       // Show cached tool names for servers that aren't currently connected
       if (!connection) {
