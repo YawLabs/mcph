@@ -276,6 +276,7 @@ mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config change
 | `MCPH_SERVER_CAP` | No | Hard cap on concurrently activated servers. Default: `6`. Set to `0` to disable. |
 | `MCPH_PRUNE_RESPONSES` | No | Conservative response pruning (redact large file blobs etc. before returning to the client). Set to `0` or `false` to disable. Default: enabled. |
 | `MCPH_DISABLE_PERSISTENCE` | No | Set to `1` or `true` to keep learning + pack-history scoped to the current process — nothing loaded at start, nothing written on shutdown. Intended for ephemeral / shared environments (CI, containers). Default: cross-session persistence enabled at `~/.mcph/state.json`. |
+| `MCPH_AUTO_LOAD` | No | Set to `1` or `true` to pre-activate the top recurring pack (from persisted pack-history) on startup — no LLM round-trip required. Skips silently when history is empty or no pack's namespaces are all installed. Default: off. Requires persistence to be enabled. |
 | `MCP_CONNECT_TIMEOUT` | No | Connection timeout in ms for upstream servers (default: `15000`) |
 | `MCP_CONNECT_IDLE_THRESHOLD` | No | Baseline for idle auto-unload (default: `10`). The per-namespace adaptive cap is `[5, 50]` — bursty namespaces extend past the baseline, long-idle ones unload at it. |
 
