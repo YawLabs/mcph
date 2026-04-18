@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEARNING_MAX_BOOST, LEARNING_MIN_OBSERVATIONS, LearningStore } from "../learning.js";
+import { LEARNING_MAX_BOOST, LEARNING_MIN_BOOST, LEARNING_MIN_OBSERVATIONS, LearningStore } from "../learning.js";
 
 describe("LearningStore", () => {
   it("returns 1.0 boost for unknown namespaces", () => {
@@ -55,5 +55,50 @@ describe("LearningStore", () => {
     store.recordSuccess("gh");
     store.reset();
     expect(store.get("gh")).toBeUndefined();
+  });
+
+  describe("penalty branch", () => {
+    it("penalizes flaky history below 80% success rate", () => {
+      const store = new LearningStore();
+      store.loadSnapshot({ flaky: { dispatched: 10, succeeded: 3, lastUsedAt: 1 } });
+      const factor = store.boostFactor("flaky");
+      expect(factor).toBeLessThan(1.0);
+      expect(factor).toBeGreaterThanOrEqual(LEARNING_MIN_BOOST);
+    });
+
+    it("floors the penalty at LEARNING_MIN_BOOST at 0% success", () => {
+      const store = new LearningStore();
+      store.loadSnapshot({ dead: { dispatched: 5, succeeded: 0, lastUsedAt: 1 } });
+      expect(store.boostFactor("dead")).toBe(LEARNING_MIN_BOOST);
+    });
+
+    it("does not penalize at or above the 80% success boundary", () => {
+      const store = new LearningStore();
+      store.loadSnapshot({ borderline: { dispatched: 10, succeeded: 8, lastUsedAt: 1 } });
+      expect(store.boostFactor("borderline")).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it("does not penalize below the observation floor (noise suppression)", () => {
+      const store = new LearningStore();
+      store.loadSnapshot({ rare: { dispatched: 2, succeeded: 0, lastUsedAt: 1 } });
+      expect(store.boostFactor("rare")).toBe(1.0);
+    });
+
+    it("penalty beats positive boost when the overall success rate is poor", () => {
+      const store = new LearningStore();
+      // 10 successes would normally saturate to LEARNING_MAX_BOOST, but
+      // the 50% overall rate triggers the penalty branch instead.
+      store.loadSnapshot({ mixed: { dispatched: 20, succeeded: 10, lastUsedAt: 1 } });
+      expect(store.boostFactor("mixed")).toBeLessThan(1.0);
+    });
+
+    it("penalty scales proportionally with the shortfall from the threshold", () => {
+      const store = new LearningStore();
+      store.loadSnapshot({
+        mild: { dispatched: 10, succeeded: 7, lastUsedAt: 1 }, // 70% rate (10% below threshold)
+        severe: { dispatched: 10, succeeded: 2, lastUsedAt: 1 }, // 20% rate (60% below threshold)
+      });
+      expect(store.boostFactor("mild")).toBeGreaterThan(store.boostFactor("severe"));
+    });
   });
 });
