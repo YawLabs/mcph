@@ -34,7 +34,7 @@
 ## Phase 3 — Platform Intelligence
 
 - [ ] **Server recommendation engine** — "Users who use GitHub MCP also use Slack MCP" based on anonymized load patterns
-- [ ] **Pre-built orchestrator configs** — Curated bundles ("The DevOps Stack: GitHub + AWS + PagerDuty", "The Marketing Stack: HubSpot + Slack + Analytics")
+- [x] **Pre-built orchestrator configs** — Curated bundles ("The DevOps Stack: GitHub + AWS + PagerDuty", "The Marketing Stack: HubSpot + Slack + Analytics"). `mcp_connect_bundles` meta-tool lists the curated catalog and with `action="match"` partitions bundles against installed servers (ready-to-activate vs partially-installed with missing-namespace hints). Static client-side data — see `src/bundles.ts`.
 - [ ] **Compliance-aware routing** — Only load servers that pass a minimum compliance grade
 - [ ] **Tool deduplication** — Detect overlapping tools across servers and surface the best one
 - [ ] **Conversation-aware routing** — If mcph could receive conversation context (future MCP spec), route automatically based on what the user is talking about
