@@ -52,7 +52,12 @@ describe("loadProjectGuide", () => {
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "mcph-guide-home-"));
-    project = mkdtempSync(join(tmpdir(), "mcph-guide-proj-"));
+    // Nest project INSIDE home so the walk-up in findProjectConfigDir
+    // terminates at the synthetic home boundary — otherwise it keeps
+    // walking past tmpdir into the real user dir and finds whatever
+    // `~/.mcph/MCPH.md` the dev machine actually has, which makes
+    // "no guide" assertions flap depending on who's running the tests.
+    project = mkdtempSync(join(home, "proj-"));
   });
 
   afterEach(() => {
@@ -94,7 +99,12 @@ describe("loadGuides", () => {
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "mcph-guide-home-"));
-    project = mkdtempSync(join(tmpdir(), "mcph-guide-proj-"));
+    // Nest project INSIDE home so the walk-up in findProjectConfigDir
+    // terminates at the synthetic home boundary — otherwise it keeps
+    // walking past tmpdir into the real user dir and finds whatever
+    // `~/.mcph/MCPH.md` the dev machine actually has, which makes
+    // "no guide" assertions flap depending on who's running the tests.
+    project = mkdtempSync(join(home, "proj-"));
   });
 
   afterEach(() => {
