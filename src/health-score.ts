@@ -48,3 +48,42 @@ export function healthFactor(
 ): number {
   return Math.min(errorRateFactor(health), activationFailureFactor(activationFailure, now));
 }
+
+// Render a short human-readable warning when a server is looking shaky,
+// so discover() can point the LLM at healthier alternatives. Returns
+// null when there is nothing to warn about — the caller should not
+// print a line at all in that case. Activation failures take precedence
+// over per-call error rates because they mean the server is currently
+// unusable, not merely unreliable. Both signals are session-local.
+//
+// We deliberately hide low-sample error rates (<3 calls) — flagging a
+// server as unhealthy after a single flaky call would train the model
+// to skip perfectly-fine servers just because the first call 500'd.
+export function formatHealthWarning(
+  health: ConnectionHealth | undefined,
+  activationFailure: ActivationFailure | undefined,
+  now: number = Date.now(),
+): string | null {
+  if (activationFailure && now - activationFailure.at <= ACTIVATION_FAILURE_TTL_MS) {
+    const ageMin = Math.max(1, Math.round((now - activationFailure.at) / 60_000));
+    const msg = activationFailure.message ? `: ${truncateForWarning(activationFailure.message)}` : "";
+    return `warn: last activation failed ${ageMin}m ago${msg}`;
+  }
+  if (health && health.totalCalls >= OBSERVATION_FLOOR) {
+    const rate = health.errorCount / health.totalCalls;
+    if (rate >= 0.3) {
+      const lastErr = health.lastErrorMessage ? `: ${truncateForWarning(health.lastErrorMessage)}` : "";
+      return `warn: ${health.errorCount} of last ${health.totalCalls} calls failed${lastErr}`;
+    }
+  }
+  return null;
+}
+
+// Keep warning strings short — discover() output goes to the LLM's
+// context window and every error message line we append is tokens the
+// caller pays. 120 chars is two lines of typical terminal width and
+// usually enough for a stack-trace top-level or an HTTP status.
+function truncateForWarning(msg: string): string {
+  const clean = msg.replace(/\s+/g, " ").trim();
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
+}

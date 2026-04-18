@@ -180,6 +180,30 @@ describe("ConnectServer", () => {
       expect(text).not.toMatch(/nothing — Nothing.*0 tools/);
     });
 
+    it("surfaces a health warning when recent calls are failing", () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      const conn = makeConnection("gh", ["create_issue"]);
+      // 4/10 failed = 40% → above the 30% warning threshold.
+      conn.health = { totalCalls: 10, errorCount: 4, totalLatencyMs: 0, lastErrorMessage: "502 bad gateway" };
+      priv.connections.set("gh", conn);
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).toContain("warn: 4 of last 10 calls failed: 502 bad gateway");
+    });
+
+    it("surfaces a recent activation failure as a discover warning", () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      // No live connection; activation failure stashed in the map.
+      priv.activationFailures.set("gh", { at: Date.now() - 60_000, message: "spawn ENOENT" });
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).toMatch(/warn: last activation failed \d+m ago: spawn ENOENT/);
+    });
+
     it("sorts servers by relevance when context provided", () => {
       const priv = getPrivate(server);
       priv.config = makeConfig([

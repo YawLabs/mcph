@@ -19,7 +19,12 @@ import { ConfigError, fetchConfig } from "./config.js";
 import { estimateFromConnectedTools, estimateFromToolCache, formatCostLabel } from "./cost-estimate.js";
 import { detectMissingCredentials } from "./credentials.js";
 import { type LoadedGuides, loadGuides, renderGuide } from "./guide.js";
-import { ACTIVATION_FAILURE_TTL_MS, type ActivationFailure, healthFactor } from "./health-score.js";
+import {
+  ACTIVATION_FAILURE_TTL_MS,
+  type ActivationFailure,
+  formatHealthWarning,
+  healthFactor,
+} from "./health-score.js";
 import { HISTORY_LIMIT, type ToolCallRecord, adaptiveThreshold, pushToolCall } from "./idle-ttl.js";
 import { LearningStore } from "./learning.js";
 import { log } from "./logger.js";
@@ -1071,6 +1076,12 @@ export class ConnectServer {
 
       const shadow = formatShadowLine(server);
       if (shadow) lines.push(`    ${shadow}`);
+
+      // Surface recent unreliability so the LLM can prefer a healthier
+      // alternative. Session-local; activation failures take precedence
+      // over per-call error rate (see formatHealthWarning).
+      const warning = formatHealthWarning(connection?.health, this.activationFailures.get(server.namespace));
+      if (warning) lines.push(`    ${warning}`);
 
       // Show cached tool names for servers that aren't currently connected
       if (!connection) {
