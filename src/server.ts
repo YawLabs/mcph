@@ -18,6 +18,7 @@ import { type Profile, loadEffectiveProfile, profileAllows } from "./config-load
 import { ConfigError, fetchConfig } from "./config.js";
 import { estimateFromConnectedTools, estimateFromToolCache, formatCostLabel } from "./cost-estimate.js";
 import { detectMissingCredentials } from "./credentials.js";
+import { type ExecStepInput, RefError, resolveArgs, stepBindingKey, validateExecRequest } from "./exec-engine.js";
 import { type LoadedGuides, loadGuides, renderGuide } from "./guide.js";
 import {
   ACTIVATION_FAILURE_TTL_MS,
@@ -721,6 +722,17 @@ export class ConnectServer {
     if (name === META_TOOLS.suggest.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "suggest", latencyMs: null, success: true });
       return this.attachGuideNudge(this.handleSuggest());
+    }
+    if (name === META_TOOLS.exec.name) {
+      const result = await this.handleExec(args);
+      recordConnectEvent({
+        namespace: null,
+        toolName: null,
+        action: "exec",
+        latencyMs: null,
+        success: !result.isError,
+      });
+      return this.attachGuideNudge(result);
     }
 
     // Snapshot routes at method entry. rebuildRoutes() may fire during
@@ -2416,6 +2428,183 @@ export class ConnectServer {
     lines.push(`\nTo load the top pack in one step, call \`mcp_connect_activate\` with namespaces=${nsJson}.`);
 
     return { content: [{ type: "text", text: lines.join("\n") }] };
+  }
+
+  // Declarative pipeline executor. Runs N tool calls in order, binding
+  // each output under the step's id (or positional index), and lets
+  // later steps splice those outputs into their args via
+  // `{"$ref": "<id>.path"}` markers. No eval, no expression language —
+  // the only dynamic behavior is the ref resolver in exec-engine.ts.
+  //
+  // Failure model: any step error fails the whole exec. The caller gets
+  // the failed step's id/index, the error string, and the outputs of
+  // the steps that did complete so they can reason about how far the
+  // pipeline got without re-running the good ones.
+  //
+  // Meta-tool calls are rejected: exec only routes to upstream tools,
+  // because recursively dispatching meta-tools (exec inside exec,
+  // activate from exec) would hide side-effects that belong at the
+  // top level of the model's reasoning.
+  private async handleExec(
+    args: Record<string, unknown>,
+  ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+    const validation = validateExecRequest(args);
+    if (!validation.ok) {
+      return {
+        content: [{ type: "text", text: `exec: ${validation.message}` }],
+        isError: true,
+      };
+    }
+
+    const steps = (args.steps as ExecStepInput[]).map((s) => ({
+      id: typeof s.id === "string" ? s.id : undefined,
+      tool: s.tool,
+      args: (s.args ?? {}) as Record<string, unknown>,
+    }));
+    const explicitReturn = typeof args.return === "string" ? args.return : undefined;
+
+    const bindings: Record<string, unknown> = {};
+    const stepKeys: string[] = [];
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const key = stepBindingKey(step, i);
+      stepKeys.push(key);
+
+      // Resolve $ref markers against the running bindings map BEFORE the
+      // tool call goes out, so the upstream sees a concrete args object.
+      let resolvedArgs: Record<string, unknown>;
+      try {
+        const resolved = resolveArgs(step.args, bindings);
+        // validateExecRequest already ensured step.args is an object,
+        // and resolveArgs only produces non-object values when the ENTIRE
+        // args is itself a $ref node — which is legal (a step can take
+        // its full args from a prior step) but must still be an object.
+        if (resolved === null || typeof resolved !== "object" || Array.isArray(resolved)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ok: false,
+                    failedStep: key,
+                    error: `step "${key}": resolved args are not an object (${typeof resolved})`,
+                    partial: bindings,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            isError: true,
+          };
+        }
+        resolvedArgs = resolved as Record<string, unknown>;
+      } catch (err) {
+        const msg = err instanceof RefError ? err.message : err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: false,
+                  failedStep: key,
+                  error: `step "${key}": ${msg}`,
+                  partial: bindings,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Meta-tools are callable by the client directly; routing them
+      // through exec would let a step, say, deactivate the server
+      // another step is about to use. Keep exec's surface narrowly
+      // proxy-only.
+      // Cast: META_TOOL_NAMES is a Set typed over the literal meta-tool
+      // names, but step.tool is a user-supplied string. The cast widens
+      // `.has()` to accept arbitrary strings without losing the runtime
+      // check.
+      if ((META_TOOL_NAMES as Set<string>).has(step.tool)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: false,
+                  failedStep: key,
+                  error: `step "${key}": meta-tool "${step.tool}" cannot be called from exec; call it directly`,
+                  partial: bindings,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Dispatch through the same handleToolCall path that normal
+      // tool-calls use. This reuses the auto-reconnect, deferred-route,
+      // and pack-detector logic so exec steps behave identically to
+      // direct calls — the caller pays no per-step cost in surprises.
+      //
+      // `extra` is omitted so exec steps don't fight for the top-level
+      // progress token; the exec itself emits no progress.
+      const stepResult = await this.handleToolCall(step.tool, resolvedArgs);
+
+      if (stepResult.isError) {
+        const errText = stepResult.content?.[0]?.text ?? "unknown error";
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: false,
+                  failedStep: key,
+                  error: errText,
+                  partial: bindings,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      bindings[key] = stepResult;
+    }
+
+    const returnKey = explicitReturn ?? stepKeys[stepKeys.length - 1];
+    const finalResult = bindings[returnKey];
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              ok: true,
+              result: finalResult,
+              steps: bindings,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
   }
 
   async shutdown(): Promise<void> {
