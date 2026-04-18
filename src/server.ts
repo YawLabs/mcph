@@ -40,6 +40,7 @@ import {
   routeResourceRead,
   routeToolCall,
 } from "./proxy.js";
+import { type Content, pruneContent } from "./prune.js";
 import { type RankableServer, rankServers, scoreRelevance } from "./relevance.js";
 import { initRerank, rerank } from "./rerank.js";
 import { initRuntimeDetect, reportRuntimes } from "./runtime-detect.js";
@@ -720,23 +721,64 @@ export class ConnectServer {
         error: result.isError ? result.content[0]?.text : undefined,
       });
 
-      // Token-cost telemetry. serverId is null on the mcph side — the
-      // backend keys analytics on (accountId, scope='connect', namespace)
-      // via toolName/namespace when the server row isn't addressable by
-      // UUID client-side.
-      try {
-        const argsBytes = Buffer.byteLength(JSON.stringify(args ?? {}), "utf8");
-        const resultBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
-        recordDispatchEvent({
-          scope: "connect",
-          serverId: null,
-          toolName: route.originalName,
-          requestBytes: argsBytes,
-          responseBytesRaw: resultBytes,
-        });
-      } catch {
-        // JSON.stringify can throw on cyclic structures — telemetry is
-        // strictly best-effort, never fail the tool call for it.
+      // Prune the response before it hits the LLM. Rules are
+      // conservative (drop null / undefined / empty collections,
+      // collapse runs of blank lines) so we trim obvious dead weight
+      // without changing meaning. Disable with MCPH_PRUNE_RESPONSES=0
+      // if a caller needs the exact upstream bytes through.
+      if (!result.isError && Array.isArray(result.content)) {
+        try {
+          const pr = pruneContent(result.content as Content[]);
+          // Only swap in the pruned body when it's actually smaller,
+          // per the MIN_SAVINGS_RATIO check inside pruneContent.
+          if (pr.bytesPruned < pr.bytesRaw) result.content = pr.content;
+          try {
+            const argsBytes = Buffer.byteLength(JSON.stringify(args ?? {}), "utf8");
+            recordDispatchEvent({
+              scope: "connect",
+              serverId: null,
+              toolName: route.originalName,
+              requestBytes: argsBytes,
+              responseBytesRaw: pr.bytesRaw,
+              responseBytesPruned: pr.bytesPruned,
+            });
+          } catch {
+            // JSON.stringify can throw on cyclic structures — telemetry
+            // is strictly best-effort, never fail the tool call for it.
+          }
+        } catch (err: any) {
+          // Pruner should never throw, but if it does, fall back to the
+          // pre-F1 telemetry path so the dispatch event still lands.
+          log("warn", "pruneContent failed", { error: err?.message });
+          try {
+            const argsBytes = Buffer.byteLength(JSON.stringify(args ?? {}), "utf8");
+            const resultBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+            recordDispatchEvent({
+              scope: "connect",
+              serverId: null,
+              toolName: route.originalName,
+              requestBytes: argsBytes,
+              responseBytesRaw: resultBytes,
+            });
+          } catch {}
+        }
+      } else {
+        // Error responses skip pruning — the text IS the error message,
+        // stripping nulls or collapsing whitespace could obscure it.
+        try {
+          const argsBytes = Buffer.byteLength(JSON.stringify(args ?? {}), "utf8");
+          const resultBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+          recordDispatchEvent({
+            scope: "connect",
+            serverId: null,
+            toolName: route.originalName,
+            requestBytes: argsBytes,
+            responseBytesRaw: resultBytes,
+          });
+        } catch {
+          // JSON.stringify can throw on cyclic structures — telemetry
+          // is strictly best-effort, never fail the tool call for it.
+        }
       }
       // Only count successful calls toward chain detection. An errored
       // call isn't a real usage signal — the user likely abandons or
