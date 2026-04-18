@@ -37,7 +37,7 @@ vi.mock("../analytics.js", () => ({
   shutdownAnalytics: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { ConnectServer } from "../server.js";
+import { ConnectServer, isAutoLoadEnabled } from "../server.js";
 import type { UpstreamConnection, UpstreamServerConfig } from "../types.js";
 import { connectToUpstream, disconnectFromUpstream } from "../upstream.js";
 
@@ -1744,5 +1744,106 @@ describe("prewarmDormantServers", () => {
     expect(priv.toolCache.get("ok")).toEqual([{ name: "ok_tool", description: undefined }]);
     expect(priv.toolCache.get("broken")).toBeUndefined();
     expect(priv.connections.size).toBe(0);
+  });
+});
+
+describe("auto-load on startup", () => {
+  let server: ConnectServer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    server = new ConnectServer("https://mcp.hosting", "test-token");
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await server.shutdown();
+  });
+
+  it("is disabled by default when MCPH_AUTO_LOAD is unset", () => {
+    vi.stubEnv("MCPH_AUTO_LOAD", "");
+    expect(isAutoLoadEnabled()).toBe(false);
+  });
+
+  it("accepts '1' and 'true' but not other values", () => {
+    vi.stubEnv("MCPH_AUTO_LOAD", "1");
+    expect(isAutoLoadEnabled()).toBe(true);
+    vi.stubEnv("MCPH_AUTO_LOAD", "true");
+    expect(isAutoLoadEnabled()).toBe(true);
+    vi.stubEnv("MCPH_AUTO_LOAD", "TRUE");
+    expect(isAutoLoadEnabled()).toBe(true);
+    vi.stubEnv("MCPH_AUTO_LOAD", "0");
+    expect(isAutoLoadEnabled()).toBe(false);
+    vi.stubEnv("MCPH_AUTO_LOAD", "yes");
+    expect(isAutoLoadEnabled()).toBe(false);
+  });
+
+  it("activates every namespace in the top recurring pack when all are installed", async () => {
+    vi.stubEnv("MCPH_AUTO_LOAD", "1");
+    const priv = getPrivate(server);
+    priv.config = {
+      configVersion: "v1",
+      servers: [
+        makeServerConfig({ id: "gh-id", namespace: "gh", name: "GitHub" }),
+        makeServerConfig({ id: "linear-id", namespace: "linear", name: "Linear" }),
+      ],
+    };
+    // Three bursts of (gh, linear) → one detected pack at frequency 3.
+    const t0 = 1_000_000;
+    priv.packDetector.recordCall("gh", "create_issue", t0);
+    priv.packDetector.recordCall("linear", "list_issues", t0 + 1000);
+    priv.packDetector.recordCall("gh", "create_issue", t0 + 300_000);
+    priv.packDetector.recordCall("linear", "list_issues", t0 + 301_000);
+    priv.packDetector.recordCall("gh", "create_issue", t0 + 600_000);
+    priv.packDetector.recordCall("linear", "list_issues", t0 + 601_000);
+
+    vi.mocked(connectToUpstream).mockImplementation(async (cfg: UpstreamServerConfig) =>
+      makeConnection(cfg.namespace, [`${cfg.namespace}_tool`]),
+    );
+
+    await priv.autoLoadRecurringPack();
+
+    // Both namespaces got activated sequentially.
+    expect(vi.mocked(connectToUpstream)).toHaveBeenCalledTimes(2);
+    const activatedNs = vi.mocked(connectToUpstream).mock.calls.map((c) => (c[0] as UpstreamServerConfig).namespace);
+    expect(activatedNs).toContain("gh");
+    expect(activatedNs).toContain("linear");
+    expect(priv.connections.get("gh")?.status).toBe("connected");
+    expect(priv.connections.get("linear")?.status).toBe("connected");
+  });
+
+  it("does not activate anything when some pack namespaces aren't installed", async () => {
+    vi.stubEnv("MCPH_AUTO_LOAD", "1");
+    const priv = getPrivate(server);
+    // Only `gh` is installed — the {gh, slack} pack can't be activated
+    // as a whole, so we must skip it entirely. Activating just `gh`
+    // would be a partial load that the caller didn't ask for.
+    priv.config = {
+      configVersion: "v1",
+      servers: [makeServerConfig({ id: "gh-id", namespace: "gh", name: "GitHub" })],
+    };
+    const t0 = 1_000_000;
+    priv.packDetector.recordCall("gh", "create_issue", t0);
+    priv.packDetector.recordCall("slack", "post_message", t0 + 1000);
+    priv.packDetector.recordCall("gh", "create_issue", t0 + 300_000);
+    priv.packDetector.recordCall("slack", "post_message", t0 + 301_000);
+
+    await priv.autoLoadRecurringPack();
+
+    expect(vi.mocked(connectToUpstream)).not.toHaveBeenCalled();
+    expect(priv.connections.size).toBe(0);
+  });
+
+  it("is a silent no-op when pack history is empty", async () => {
+    vi.stubEnv("MCPH_AUTO_LOAD", "1");
+    const priv = getPrivate(server);
+    priv.config = {
+      configVersion: "v1",
+      servers: [makeServerConfig({ id: "gh-id", namespace: "gh", name: "GitHub" })],
+    };
+
+    await priv.autoLoadRecurringPack();
+
+    expect(vi.mocked(connectToUpstream)).not.toHaveBeenCalled();
   });
 });

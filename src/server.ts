@@ -101,6 +101,18 @@ export function isPersistenceDisabled(): boolean {
   return raw === "1" || raw.toLowerCase() === "true";
 }
 
+// Opt-in auto-load. Set MCPH_AUTO_LOAD=1 (or "true") to pre-activate the
+// top recurring pack from persisted history on startup — no LLM round
+// trip required. Default off: auto-activation normally rides on an
+// explicit discover() call (see MCPH_AUTO_ACTIVATE). This is for users
+// who know their workflow starts the same way every session and want
+// to skip the discover step entirely.
+export function isAutoLoadEnabled(): boolean {
+  const raw = process.env.MCPH_AUTO_LOAD;
+  if (raw === undefined || raw === "") return false;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
 function resolveNamespaces(args: Record<string, unknown>): string[] {
   if (Array.isArray(args.servers) && args.servers.length > 0) {
     return args.servers as string[];
@@ -499,9 +511,53 @@ export class ConnectServer {
     // Fire-and-forget so this doesn't gate transport readiness.
     this.prewarmDormantServers().catch((err: Error) => log("warn", "Pre-warm failed", { error: err?.message }));
 
+    // Opt-in auto-load of the top recurring pack. Requires persistence
+    // (so there IS a history to learn from) AND MCPH_AUTO_LOAD=1. Runs
+    // after prewarm so both paths see the same config snapshot; they're
+    // independent (prewarm populates toolCache for dashboard-toggled
+    // servers, this one spins up the recurring workflow's servers for
+    // real). Fire-and-forget — startup shouldn't block on it.
+    if (isAutoLoadEnabled() && this.persistenceReady) {
+      this.autoLoadRecurringPack().catch((err: Error) => log("warn", "Auto-load failed", { error: err?.message }));
+    }
+
     log("info", "mcph started", {
       apiUrl: this.apiUrl,
       servers: this.config?.servers.length ?? 0,
+    });
+  }
+
+  // Auto-activate the single highest-ranked pack whose every namespace
+  // is installed. Opt-in via MCPH_AUTO_LOAD. Silent no-op when there's
+  // no history or no matching pack — the value is "skip discover when
+  // my workflow starts the same way every time," not "noisy on every
+  // startup." Sequential activateOne (not parallel) so the cap logic
+  // and dedup map see consistent state between loads.
+  private async autoLoadRecurringPack(): Promise<void> {
+    const installedNamespaces = new Set(this.getProfiledActiveServers().map((s) => s.namespace));
+    if (installedNamespaces.size === 0) return;
+
+    const chains = this.packDetector.detectChains();
+    if (chains.length === 0) return;
+
+    const candidates = chains
+      .filter((pack) => pack.namespaces.every((ns) => installedNamespaces.has(ns)))
+      .sort((a, b) => {
+        if (b.frequency !== a.frequency) return b.frequency - a.frequency;
+        return b.lastSeenAt - a.lastSeenAt;
+      });
+    if (candidates.length === 0) return;
+
+    const top = candidates[0];
+    for (const namespace of top.namespaces) {
+      await this.activateOne(namespace).catch((err: Error) =>
+        log("warn", "Auto-load activateOne failed", { namespace, error: err?.message }),
+      );
+    }
+
+    log("info", "Auto-loaded recurring pack", {
+      namespaces: top.namespaces,
+      frequency: top.frequency,
     });
   }
 
