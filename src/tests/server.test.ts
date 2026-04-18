@@ -38,7 +38,7 @@ vi.mock("../analytics.js", () => ({
 }));
 
 import { buildToolList } from "../proxy.js";
-import { ConnectServer, isAutoLoadEnabled } from "../server.js";
+import { ConnectServer, computeToolOverlaps, isAutoLoadEnabled } from "../server.js";
 import type { UpstreamConnection, UpstreamServerConfig } from "../types.js";
 import { connectToUpstream, disconnectFromUpstream } from "../upstream.js";
 
@@ -274,6 +274,91 @@ describe("ConnectServer", () => {
       const text = result.content[0].text;
       expect(text).toContain("No servers installed");
       expect(text).toContain("https://mcp.hosting/explore");
+    });
+  });
+
+  describe("discover tool overlaps", () => {
+    it("surfaces a bare tool name shared by two connected servers", () => {
+      // fs and github both expose `read_file` — the LLM needs a nudge
+      // toward dispatch to pick the right one, so the overlap line lists
+      // both namespaces and points at mcp_connect_dispatch.
+      const priv = getPrivate(server);
+      priv.config = makeConfig([
+        makeServerConfig({ namespace: "fs", name: "FS" }),
+        makeServerConfig({ namespace: "github", name: "GitHub" }),
+      ]);
+      priv.connections.set("fs", makeConnection("fs", ["read_file", "write_file"]));
+      priv.connections.set("github", makeConnection("github", ["read_file", "list_repos"]));
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).toContain("Overlapping tools (same bare name in multiple servers):");
+      expect(text).toContain("read_file — available in: fs, github");
+      expect(text).toContain("use mcp_connect_dispatch to disambiguate");
+    });
+
+    it("suppresses the overlaps block when no bare names collide", () => {
+      // One connected server, no collisions — the block should not even
+      // print its header, otherwise we're adding noise to the common case.
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "fs", name: "FS" })]);
+      priv.connections.set("fs", makeConnection("fs", ["read_file", "write_file"]));
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).not.toContain("Overlapping tools");
+    });
+
+    it("lists all namespaces alphabetically when three or more share a name", () => {
+      // Three-way overlap — every namespace shows up on the line, sorted
+      // alphabetically so the output is deterministic across runs.
+      const priv = getPrivate(server);
+      priv.config = makeConfig([
+        makeServerConfig({ namespace: "linear", name: "Linear" }),
+        makeServerConfig({ namespace: "gh", name: "GitHub" }),
+        makeServerConfig({ namespace: "jira", name: "Jira" }),
+      ]);
+      priv.connections.set("linear", makeConnection("linear", ["list_issues"]));
+      priv.connections.set("gh", makeConnection("gh", ["list_issues"]));
+      priv.connections.set("jira", makeConnection("jira", ["list_issues"]));
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).toContain("list_issues — available in: gh, jira, linear");
+    });
+
+    it("caps the overlaps block at the top 5", () => {
+      // Seven distinct overlapping bare names, all with the same pair
+      // count — the block must stop at 5 and tie-break alphabetically
+      // so the rendered list stays bounded. `toolA` through `toolE`
+      // should be kept; `toolF` and `toolG` should be dropped.
+      const priv = getPrivate(server);
+      priv.config = makeConfig([
+        makeServerConfig({ namespace: "x", name: "X" }),
+        makeServerConfig({ namespace: "y", name: "Y" }),
+      ]);
+      const overlapping = ["toolG", "toolA", "toolC", "toolE", "toolB", "toolF", "toolD"];
+      priv.connections.set("x", makeConnection("x", overlapping));
+      priv.connections.set("y", makeConnection("y", overlapping));
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      for (const kept of ["toolA", "toolB", "toolC", "toolD", "toolE"]) {
+        expect(text).toContain(`${kept} — available in: x, y`);
+      }
+      expect(text).not.toContain("toolF — available in");
+      expect(text).not.toContain("toolG — available in");
+    });
+
+    it("ignores disconnected servers when computing overlaps", () => {
+      // A dormant server whose tool cache would otherwise collide must
+      // not count — we don't have a live schema for it, so claiming an
+      // overlap would be a lie. computeToolOverlaps only sees the
+      // connected connection, so no overlap is emitted.
+      const conn = makeConnection("fs", ["read_file"]);
+      const errored = makeConnection("github", ["read_file"], "error");
+      const result = computeToolOverlaps([conn, errored]);
+      expect(result).toEqual([]);
     });
   });
 
