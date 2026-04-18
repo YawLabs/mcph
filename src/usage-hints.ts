@@ -1,8 +1,7 @@
 import type { NamespaceUsage } from "./learning.js";
 import type { DetectedPack } from "./pack-detect.js";
 
-// Inline usage hints for discover() output. Two signals, both
-// session-local:
+// Inline usage hints for discover() output. Two signals:
 //
 //   1. Success count from LearningStore — "you called this N times
 //      and it worked." Populated by dispatch's post-call success
@@ -12,11 +11,11 @@ import type { DetectedPack } from "./pack-detect.js";
 //      you usually had Y loaded too." Populated by successful proxied
 //      tool calls across ≥2 distinct namespaces within a short gap.
 //
-// Neither persists across process restarts today. That's a known
-// limitation — cross-session learning needs backend coordination and
-// is tracked separately. Within a single session the signals are
-// still useful: they help the LLM re-pick servers it already knows
-// work, and they hint at the next server likely needed next.
+// Both signals persist across mcph restarts via ~/.mcph/state.json
+// (see persistence.ts) so a freshly-started session still knows which
+// servers the user has been relying on. Counts reflect cumulative
+// successful use since persistence started, not just the live process.
+// Set MCPH_DISABLE_PERSISTENCE=1 to keep signals session-local only.
 
 // Cap on peers per hint. Keeps the discover() line length bounded —
 // more than ~3 peers quickly drowns out the rest of the server card.
@@ -58,7 +57,11 @@ export function buildCoUsageMap(packs: DetectedPack[]): Map<string, string[]> {
 export function formatUsageHint(usage: NamespaceUsage | undefined, coUsedWith: string[]): string | null {
   const parts: string[] = [];
   if (usage && usage.succeeded >= MIN_SUCCESS_TO_SHOW) {
-    parts.push(`used ${usage.succeeded}x this session`);
+    // No "this session" qualifier: with cross-session persistence the
+    // count is cumulative (restored from state.json on startup). Tacking
+    // "this session" on overclaims freshness; dropping it is both
+    // shorter and accurate in both persistence-on and opt-out states.
+    parts.push(`used ${usage.succeeded}x`);
   }
   if (coUsedWith.length > 0) {
     const shown = coUsedWith.slice(0, MAX_PEERS);

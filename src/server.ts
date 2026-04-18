@@ -194,8 +194,10 @@ export class ConnectServer {
     string,
     Promise<{ ok: boolean; message: string; isChanged: boolean; serverId?: string }>
   >();
-  // Session-scoped usage learning — nudges dispatch toward namespaces
-  // that have been genuinely useful this session. See learning.ts.
+  // Usage learning — nudges dispatch toward namespaces that have been
+  // genuinely useful. Counts persist across mcph restarts via state.json
+  // (see persistence.ts). MCPH_DISABLE_PERSISTENCE=1 makes it session
+  // -scoped only. See learning.ts.
   private readonly learning = new LearningStore();
   // Session-scoped chain detection — watches proxied tool calls across
   // namespaces and surfaces recurring multi-server patterns as suggested
@@ -1158,9 +1160,10 @@ export class ConnectServer {
       const warning = formatHealthWarning(connection?.health, this.activationFailures.get(server.namespace));
       if (warning) lines.push(`    ${warning}`);
 
-      // Inline usage hint — what succeeded in this session + who tends
-      // to get loaded alongside this server. Silent when neither signal
-      // has evidence yet. See usage-hints.ts.
+      // Inline usage hint — cumulative success count + who tends to
+      // get loaded alongside this server. Counts come from state.json
+      // (persistence.ts) so they carry across mcph restarts. Silent
+      // when neither signal has evidence yet. See usage-hints.ts.
       const usageHint = formatUsageHint(this.learning.get(server.namespace), coUsageMap.get(server.namespace) ?? []);
       if (usageHint) lines.push(`    ${usageHint}`);
 
@@ -2310,7 +2313,10 @@ export class ConnectServer {
     });
 
     const lines: string[] = [
-      `Detected ${ranked.length} recurring server pack${ranked.length === 1 ? "" : "s"} in this session:\n`,
+      // Pack history carries across mcph restarts (see persistence.ts),
+      // so "recurring" isn't scoped to the live process — don't over
+      // -claim with "this session" here.
+      `Detected ${ranked.length} recurring server pack${ranked.length === 1 ? "" : "s"}:\n`,
     ];
     for (const pack of ranked) {
       const nsList = pack.namespaces.join(", ");

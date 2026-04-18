@@ -47,7 +47,7 @@ describe("formatUsageHint", () => {
   });
 
   it("renders a success count", () => {
-    expect(formatUsageHint(usage(4), [])).toBe("usage: used 4x this session");
+    expect(formatUsageHint(usage(4), [])).toBe("usage: used 4x");
   });
 
   it("renders co-usage peers", () => {
@@ -55,7 +55,7 @@ describe("formatUsageHint", () => {
   });
 
   it("renders both signals joined", () => {
-    expect(formatUsageHint(usage(3), ["slack"])).toBe('usage: used 3x this session; often loaded with "slack"');
+    expect(formatUsageHint(usage(3), ["slack"])).toBe('usage: used 3x; often loaded with "slack"');
   });
 
   it("caps peers at 3 and shows a +N more suffix for overflow", () => {

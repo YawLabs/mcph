@@ -565,7 +565,7 @@ describe("ConnectServer", () => {
       priv.learning.recordSuccess("gh");
 
       const result = await priv.handleToolCall("mcp_connect_discover", {});
-      expect(result.content[0].text).toContain("usage: used 3x this session");
+      expect(result.content[0].text).toContain("usage: used 3x");
     });
 
     it("surfaces co-usage peers from the pack detector", async () => {
