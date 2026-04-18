@@ -13,7 +13,8 @@ export interface ConnectAnalyticsEvent {
     | "install"
     | "health"
     | "suggest"
-    | "read_tool";
+    | "read_tool"
+    | "exec";
   latencyMs: number | null;
   success: boolean;
   error?: string;

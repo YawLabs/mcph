@@ -240,6 +240,56 @@ export const META_TOOLS = {
       openWorldHint: false,
     },
   },
+  exec: {
+    name: "mcp_connect_exec",
+    description:
+      "Run a short DECLARATIVE pipeline of upstream tool calls in a single round-trip. Use this when you already know the exact 2-4 tool calls to make and one call's output feeds another's args — e.g. `a = gh_list_prs(); b = gh_get_pr(a[0].number); return b`. NOT a code sandbox: there is no expression language, no loops, no branching, no arithmetic. The only control flow is sequential step execution; the only data-flow primitive is `{\"$ref\": \"<stepId>[.path.to.value]\"}` which substitutes a prior step's output (or a nested field of it) into the next step's args. Paths support dot keys and `[N]` / `.N` array indexing. Each step's `tool` must be a namespaced, already-loaded tool name (the exec does not auto-activate — call `mcp_connect_activate` first). Max 16 steps per exec. If any step fails, the whole pipeline fails and returns `{ ok: false, failedStep, error, partial: { ...completed outputs } }`. On success returns `{ ok: true, result: <return-step output>, steps: { ...all outputs } }`. Prefer this over back-to-back tool calls when the chain is deterministic — it saves prompt-token replay and client round-trips.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        steps: {
+          type: "array",
+          description:
+            'Ordered list of tool calls to run. Each step is `{ id?: string, tool: string, args?: object }`. `args` values may be `{"$ref": "<stepId>.path"}` to inject a prior step\'s output.',
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                description:
+                  "Optional binding name for this step's output. Later steps reference it via `$ref`. Defaults to the step's positional index as a string.",
+              },
+              tool: {
+                type: "string",
+                description:
+                  'Namespaced tool name (e.g. "gh_list_prs"). Must be a tool currently loaded in the session. Meta-tools (mcp_connect_*) are not callable from exec.',
+              },
+              args: {
+                type: "object",
+                description:
+                  'Arguments for the tool call. Any value (including deeply nested) may be `{"$ref": "<stepId>[.path]"}` to substitute a prior step\'s output at that position.',
+                additionalProperties: true,
+              },
+            },
+            required: ["tool"],
+          },
+        },
+        return: {
+          type: "string",
+          description:
+            "Optional: id of the step whose output should be surfaced as `result`. Defaults to the last step's id (or its positional index).",
+        },
+      },
+      required: ["steps"],
+    },
+    annotations: {
+      title: "Exec Pipeline",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
 } as const;
 
 // Namespaces must match this on both mcph's side and the backend so the
@@ -354,4 +404,5 @@ export const META_TOOL_NAMES = new Set([
   META_TOOLS.install.name,
   META_TOOLS.read_tool.name,
   META_TOOLS.suggest.name,
+  META_TOOLS.exec.name,
 ]);

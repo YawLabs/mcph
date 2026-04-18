@@ -1030,6 +1030,87 @@ describe("ConnectServer", () => {
       expect(text).not.toContain("mcp_connect_dispatch");
       expect(text).toMatch(/namespaces=\[.*"gh".*"linear".*\]|namespaces=\[.*"linear".*"gh".*\]/);
     });
+
+    it("routes meta-tool exec through a two-step pipeline with $ref binding", async () => {
+      // Exec threads the first tool's output into the second tool's
+      // args via {"$ref": "first.content[0].text"}. Proves the server
+      // wires the exec-engine resolver to the real dispatch path.
+      const priv = getPrivate(server);
+      const conn = makeConnection("gh", ["list_prs", "get_pr"]);
+      const callTool = vi
+        .fn()
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "42" }] })
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "PR #42 body" }] });
+      conn.client.callTool = callTool;
+      priv.connections.set("gh", conn);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      priv.rebuildRoutes();
+
+      const result = await priv.handleToolCall("mcp_connect_exec", {
+        steps: [
+          { id: "first", tool: "gh_list_prs", args: {} },
+          {
+            id: "second",
+            tool: "gh_get_pr",
+            args: { number: { $ref: "first.content[0].text" } },
+          },
+        ],
+        return: "second",
+      });
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.result.content[0].text).toBe("PR #42 body");
+      // Both steps should have landed in the output map.
+      expect(Object.keys(parsed.steps).sort()).toEqual(["first", "second"]);
+      // The second upstream call must have received the resolved value,
+      // not the raw $ref marker — otherwise the resolver never fired.
+      expect(callTool).toHaveBeenNthCalledWith(2, {
+        name: "get_pr",
+        arguments: { number: "42" },
+      });
+    });
+
+    it("fails the whole pipeline and surfaces partial outputs when a step errors", async () => {
+      const priv = getPrivate(server);
+      const conn = makeConnection("gh", ["list_prs", "get_pr"]);
+      conn.client.callTool = vi
+        .fn()
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "ok step 1" }] })
+        .mockRejectedValueOnce(new Error("upstream boom"));
+      priv.connections.set("gh", conn);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      priv.rebuildRoutes();
+
+      const result = await priv.handleToolCall("mcp_connect_exec", {
+        steps: [
+          { id: "first", tool: "gh_list_prs", args: {} },
+          { id: "second", tool: "gh_get_pr", args: {} },
+        ],
+      });
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.failedStep).toBe("second");
+      expect(parsed.error).toContain("upstream boom");
+      // The first step ran and its output survives in `partial` so the
+      // caller knows how far the pipeline got before the failure.
+      expect(parsed.partial.first.content[0].text).toBe("ok step 1");
+      expect(parsed.partial.second).toBeUndefined();
+    });
+
+    it("enforces the MAX_EXEC_STEPS cap", async () => {
+      const priv = getPrivate(server);
+      // 17 steps — one over the cap of 16. Must reject before any call.
+      const steps = Array.from({ length: 17 }, (_, i) => ({
+        id: `s${i}`,
+        tool: "gh_list_prs",
+        args: {},
+      }));
+      const result = await priv.handleToolCall("mcp_connect_exec", { steps });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("too many steps");
+    });
   });
 
   describe("MCPH_POLL_INTERVAL env var", () => {
