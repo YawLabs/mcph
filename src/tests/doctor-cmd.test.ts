@@ -311,6 +311,54 @@ describe("runDoctor — STATE section", () => {
   });
 });
 
+describe("runDoctor — ENVIRONMENT section", () => {
+  it("renders every behavior-modifier var with '(not set)' when none are set", async () => {
+    const cap = captureOut();
+    await runDoctor({
+      cwd: synthCwd,
+      home: synthHome,
+      env: { MCPH_TOKEN: "mcp_pat_aaaa" },
+      os: "linux",
+      out: cap.out,
+      skipRegistryCheck: true,
+    });
+    const txt = cap.text();
+    expect(txt).toMatch(/ENVIRONMENT \(behavior overrides\)/);
+    // Every tracked var must be listed so support can see at a glance
+    // whether the user set it. Default-hint strings prove the row is
+    // rendered with the "(not set — …)" form rather than a raw value.
+    expect(txt).toMatch(/MCPH_POLL_INTERVAL\s+\(not set — default 60s\)/);
+    expect(txt).toMatch(/MCPH_SERVER_CAP\s+\(not set — default 6\)/);
+    expect(txt).toMatch(/MCPH_MIN_COMPLIANCE\s+\(not set — filter inactive\)/);
+    expect(txt).toMatch(/MCPH_AUTO_LOAD\s+\(not set — auto-load inactive\)/);
+    expect(txt).toMatch(/MCPH_PRUNE_RESPONSES\s+\(not set — pruning active\)/);
+  });
+
+  it("prints the raw value (not the default hint) when a var is set", async () => {
+    const cap = captureOut();
+    await runDoctor({
+      cwd: synthCwd,
+      home: synthHome,
+      env: {
+        MCPH_TOKEN: "mcp_pat_aaaa",
+        MCPH_SERVER_CAP: "10",
+        MCPH_MIN_COMPLIANCE: "B",
+        MCPH_AUTO_LOAD: "1",
+      },
+      os: "linux",
+      out: cap.out,
+      skipRegistryCheck: true,
+    });
+    const txt = cap.text();
+    expect(txt).toMatch(/MCPH_SERVER_CAP\s+10/);
+    expect(txt).toMatch(/MCPH_MIN_COMPLIANCE\s+B/);
+    expect(txt).toMatch(/MCPH_AUTO_LOAD\s+1/);
+    // Unset vars should still show their default hint.
+    expect(txt).toMatch(/MCPH_POLL_INTERVAL\s+\(not set/);
+    expect(txt).toMatch(/MCPH_PRUNE_RESPONSES\s+\(not set/);
+  });
+});
+
 describe("formatRelativeAge", () => {
   it("renders seconds under a minute", () => {
     expect(formatRelativeAge(0)).toBe("0s");

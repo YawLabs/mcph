@@ -117,6 +117,13 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorResult>
   print(`  source: ${config.apiBaseSource}`);
   print("");
 
+  // Behavior-modifier env vars that mcph actually reads at runtime.
+  // Surfaced here so support diagnostics can see at a glance whether an
+  // override is active (e.g., "my auto-load isn't working" — doctor
+  // says AUTO_LOAD is not set). TOKEN / URL / DISABLE_PERSISTENCE have
+  // their own dedicated sections and are intentionally omitted.
+  renderEnvSection({ env, print });
+
   // Persisted cross-session state — ~/.mcph/state.json. Shows whether
   // persistence is disabled by env, and otherwise reports the file path
   // + how fresh the snapshot is + how much signal it carries.
@@ -204,6 +211,35 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorResult>
 // Prints the STATE section. Broken out so the control flow in
 // runDoctor stays linear — this is already the third file-reading
 // section (config, client probes, history scan).
+// Enumerates the behavior-modifier env vars mcph actually reads so a
+// support ticket can paste doctor output and we can tell at a glance
+// which knobs are turned on. Leaves TOKEN / URL / DISABLE_PERSISTENCE
+// to their dedicated sections (they have richer context there).
+//
+// The "default when unset" hint next to each unset value is the most
+// useful bit — without it users don't know what the omission means.
+function renderEnvSection(opts: {
+  env: NodeJS.ProcessEnv;
+  print: (s?: string) => void;
+}): void {
+  const { env, print } = opts;
+  const vars: Array<{ name: string; defaultHint: string }> = [
+    { name: "MCPH_POLL_INTERVAL", defaultHint: "default 60s" },
+    { name: "MCPH_SERVER_CAP", defaultHint: "default 6" },
+    { name: "MCPH_MIN_COMPLIANCE", defaultHint: "filter inactive" },
+    { name: "MCPH_AUTO_LOAD", defaultHint: "auto-load inactive" },
+    { name: "MCPH_PRUNE_RESPONSES", defaultHint: "pruning active" },
+  ];
+  const widest = vars.reduce((m, v) => Math.max(m, v.name.length), 0);
+  print("ENVIRONMENT (behavior overrides)");
+  for (const v of vars) {
+    const raw = env[v.name];
+    const value = raw === undefined || raw === "" ? `(not set — ${v.defaultHint})` : raw;
+    print(`  ${v.name.padEnd(widest)}  ${value}`);
+  }
+  print("");
+}
+
 async function renderStateSection(opts: {
   home: string;
   env: NodeJS.ProcessEnv;
