@@ -29,7 +29,7 @@
 - [x] **Signature-on-demand meta-tool** — A `mcp_connect_read_tool` that returns a single tool's schema + docs without loading its server. For servers with many tools where the model only needs 1–2, loads 1–2 schemas instead of the whole catalog. One step beyond per-tool load: no load event at all. (Pattern borrowed from Bifrost Code Mode's `list → read → execute` surface.)
 - [x] **Orchestration sandbox** — `mcp_connect_exec` runs a short declarative pipeline of upstream tool calls in one round-trip. Each step names a namespaced tool + args; `{"$ref": "<stepId>[.path]"}` markers in args splice a prior step's output into the next step's input so the model can express `a = call_x(); b = call_y(a); return b` without code execution. No eval / no expression language — only sequential dispatch and dot/bracket path resolution on previously-bound outputs. Capped at 16 steps; any step failure fails the pipeline and returns completed outputs as `partial`.
 - [x] **Marketplace integration** — `discover()` surfaces `https://mcp.hosting/explore` for users with sparse configs (< 5 installed servers). URL pointer only — the catalog is a human-browsable SPA with no public JSON API today, so a full `mcp_connect_marketplace` meta-tool is parked until the backend ships one.
-- [ ] **Multi-device config sync** — Same token, same config, across all machines (already works implicitly, but needs marketing)
+- [x] **Multi-device config sync** — Same token, same config, across all machines. Works implicitly since mcph pulls its server list from the account on every poll; documented in README's "Multi-device sync" section so it's visible on the product surface rather than buried in architecture.
 
 ## Phase 3 — Platform Intelligence
 

@@ -27,16 +27,19 @@ Your MCP client (Claude Code, Cursor, etc.)
    - **`mcp_connect_install`** — install a new MCP server on your mcp.hosting account.
    - **`mcp_connect_import`** — bulk-import servers from an existing client config (`claude_desktop_config.json`, `mcp.json`, etc.).
    - **`mcp_connect_health`** — show call counts, error rates, and latency per loaded server.
-   - **`mcp_connect_suggest`** — surface recurring multi-server workflows mcph has watched in this session. When you repeatedly use `gh` → `linear` → `slack` for the same kind of task, `suggest` lists the pattern so you can dispatch it as one intent next time.
+   - **`mcp_connect_suggest`** — surface recurring multi-server workflows mcph has learned from persisted pack history. When you repeatedly use `gh` → `linear` → `slack` for the same kind of task, `suggest` lists the pattern with a ready-to-run `activate` call so you can load the whole pack at once.
+   - **`mcp_connect_read_tool`** — return a single tool's schema + docs without activating its server. Reads 1–2 schemas instead of loading a whole catalog when the model only needs a couple of tools from a big server.
+   - **`mcp_connect_exec`** — run a short declarative pipeline of tool calls in one round-trip. Steps name namespaced tools + args; `{"$ref": "<stepId>[.path]"}` markers splice prior outputs into later inputs. No eval — only dot/bracket path resolution. Capped at 16 steps.
+   - **`mcp_connect_bundles`** — list curated multi-server presets (DevOps incident, PR review, growth stack, data ops, etc.) and/or match them against your current config. Pair it with `mcp_connect_activate` to load a whole bundle at once.
 
 Installing a server puts it on your account; loading it brings its tools into the current session's context. mcph loads servers lazily so your context window stays clean.
 
 Ranking is two-stage when the backend has a Voyage embeddings key configured: a local BM25 pass narrows to a shortlist, then a `/api/connect/rerank` call semantically reorders. With no key on the backend it gracefully degrades to BM25-only — `dispatch` and `discover(context)` keep working, just with slightly weaker ranking on ambiguous queries.
 
-On top of the ranker, mcph applies three session-local signals to dispatch scores:
+On top of the ranker, mcph applies three client-side signals to dispatch scores:
 
 - **Health-aware**: servers that have recently failed to load or have high error rates get down-ranked. Never boosts above raw — "all else equal, prefer the one that works".
-- **Learning**: servers that have succeeded this session get a small (+10% max) nudge, so the router remembers what's been useful.
+- **Learning**: servers that have succeeded before get a small (+10% max) nudge, so the router remembers what's been useful. Success counts persist across restarts via `~/.mcph/state.json` (opt out with `MCPH_DISABLE_PERSISTENCE=1`).
 - **Sampling tiebreak**: when the top two candidates are within 10% of each other and your client supports [MCP sampling](https://modelcontextprotocol.io/specification/server/sampling), mcph asks your client's LLM to pick. Uses the model you're already running — no extra provider key, no extra cost to mcph.
 
 ## Install
@@ -264,6 +267,12 @@ When a load fails (missing token, runtime not on PATH, server crashes on init), 
 
 mcph polls [mcp.hosting](https://mcp.hosting) every 60 seconds for config changes. When you add, remove, or modify a server on the dashboard, mcph picks it up automatically — no restart needed.
 
+### Multi-device sync
+
+Because every mcph install reads the same account's server list, the same token gives you the same servers across every machine. Install mcph on a second laptop with the same `mcp_pat_...`, and within 60 seconds it sees the same GitHub/Slack/Stripe/etc. servers you configured from the first. Tokens, environment variables, and credentials stay in the dashboard — you don't have to sync a JSON file across machines, copy secrets into a dotfile repo, or re-paste an API key per device.
+
+Rotate a credential in one place (the dashboard), every machine picks up the new value on the next poll. Revoke a token in Settings → API Tokens, every install stops working immediately (the token is the only thing authenticating the config pull). This is why `~/.mcph/config.json` holds a token, not a server list — the server list is the cloud's concern.
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -301,4 +310,5 @@ The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.)
 
 - [mcp.hosting](https://mcp.hosting) — Dashboard and server management
 - [@yawlabs/mcp-compliance](https://www.npmjs.com/package/@yawlabs/mcp-compliance) — Test your MCP servers for spec compliance
+- [CHANGELOG](./CHANGELOG.md) — Release notes
 - [GitHub](https://github.com/YawLabs/mcph) — Source code and issues
