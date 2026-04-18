@@ -73,6 +73,7 @@ const SUBCOMMAND_SPEC: SubcommandSpec[] = [
   { name: "compliance", flags: ["--publish", "--help"] },
   { name: "reset-learning", flags: ["--help"] },
   { name: "completion", positional: ["bash", "zsh", "fish", "powershell"], flags: ["--help"] },
+  { name: "upgrade", flags: ["--run", "--json", "--help"] },
   { name: "help", flags: [] },
 ];
 
@@ -175,6 +176,7 @@ function renderZsh(): string {
     compliance: "Run the compliance suite against a server",
     "reset-learning": "Clear cross-session learning history",
     completion: "Print a shell completion script",
+    upgrade: "Upgrade @yawlabs/mcph to the latest version",
     help: "Show usage",
   };
   const subcommandList = SUBCOMMAND_SPEC.map((s) => `    '${s.name}:${subcommandDescriptions[s.name] ?? ""}'`).join(

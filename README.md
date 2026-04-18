@@ -92,6 +92,7 @@ mcph servers [<namespace-filter>] [--json]    # list servers; optional substring
 mcph bundles [list|match] [--json]    # browse curated multi-server bundles (PR review, DevOps incident, etc.)
 mcph reset-learning                   # clear cross-session learning history (~/.mcph/state.json)
 mcph completion <bash|zsh|fish|powershell>   # print shell completion script
+mcph upgrade [--run] [--json]         # show (or execute) the command that bumps @yawlabs/mcph
 mcph compliance <target> [--publish]  # run the compliance suite against an MCP server
 mcph --version                        # print version
 ```
