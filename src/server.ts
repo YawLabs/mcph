@@ -155,6 +155,40 @@ function tokenizeForSummary(text: string): Set<string> {
   );
 }
 
+// Detect tools with the same BARE name across multiple currently-connected
+// servers. Dormant or disconnected namespaces don't count — we don't have
+// their live tool schemas and can't be certain they'd collide. Returns
+// entries sorted by namespace count desc, tie-break by bare-name asc;
+// each entry's `namespaces` array is alphabetically sorted for stable output.
+// Exported for unit tests.
+export function computeToolOverlaps(
+  connections: Iterable<UpstreamConnection>,
+): Array<{ bareName: string; namespaces: string[] }> {
+  const byName = new Map<string, Set<string>>();
+  for (const conn of connections) {
+    if (conn.status !== "connected") continue;
+    const ns = conn.config.namespace;
+    for (const tool of conn.tools) {
+      let set = byName.get(tool.name);
+      if (!set) {
+        set = new Set<string>();
+        byName.set(tool.name, set);
+      }
+      set.add(ns);
+    }
+  }
+  const overlaps: Array<{ bareName: string; namespaces: string[] }> = [];
+  for (const [bareName, nsSet] of byName) {
+    if (nsSet.size < 2) continue;
+    overlaps.push({ bareName, namespaces: [...nsSet].sort() });
+  }
+  overlaps.sort((a, b) => {
+    if (b.namespaces.length !== a.namespaces.length) return b.namespaces.length - a.namespaces.length;
+    return a.bareName.localeCompare(b.bareName);
+  });
+  return overlaps;
+}
+
 export class ConnectServer {
   private server: Server;
   private connections = new Map<string, UpstreamConnection>();
@@ -1303,6 +1337,23 @@ export class ConnectServer {
           const toolNames = cached.map((t) => t.name).join(", ");
           lines.push(`    known tools: ${toolNames}`);
         }
+      }
+    }
+
+    // Overlapping tools block — detect bare tool names that appear in
+    // ≥2 currently-connected servers. Dormant/installed-but-not-connected
+    // servers are excluded; we only have live schemas for connected ones.
+    // Capped at the top 5 overlaps (by namespace count desc, bare-name
+    // alphabetical tie-break) to keep output bounded. Suppressed entirely
+    // when no overlaps exist.
+    const overlaps = computeToolOverlaps(this.connections.values());
+    if (overlaps.length > 0) {
+      lines.push("\nOverlapping tools (same bare name in multiple servers):");
+      const top = overlaps.slice(0, 5);
+      for (let i = 0; i < top.length; i++) {
+        const o = top[i];
+        const suffix = i === 0 ? " (use mcp_connect_dispatch to disambiguate)" : "";
+        lines.push(`  ${o.bareName} — available in: ${o.namespaces.join(", ")}${suffix}`);
       }
     }
 
