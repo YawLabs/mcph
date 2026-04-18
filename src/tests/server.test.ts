@@ -148,6 +148,38 @@ describe("ConnectServer", () => {
       expect(result.content[0].text).toContain("known tools: create_issue, list_prs");
     });
 
+    it("surfaces a token-cost estimate per server line", () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([
+        makeServerConfig({ namespace: "gh", name: "GitHub" }),
+        makeServerConfig({ namespace: "slack", name: "Slack" }),
+      ]);
+      // gh is loaded — live tool count, no tilde. slack has cached tools
+      // only — cached estimate, tilde prefix.
+      priv.connections.set("gh", makeConnection("gh", ["create_issue", "list_prs"]));
+      priv.toolCache.set("slack", [{ name: "post" }, { name: "list_channels" }, { name: "dm" }]);
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      // Connected: "N tools, M tokens" (no tilde prefix on the count).
+      expect(text).toMatch(/gh — GitHub.*?— 2 tools, \d+ tokens/);
+      // Cached: "N tools, ~M tokens" with tilde.
+      expect(text).toMatch(/slack — Slack.*?— 3 tools, ~\d+ tokens/);
+      // Session summary also mentions approximate total tokens.
+      expect(text).toMatch(/1 loaded in this session, 2 tools in context \(~\d+ tokens\)/);
+    });
+
+    it("omits the cost label when there's nothing to estimate", () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "nothing", name: "Nothing" })]);
+      // No connection, no toolCache — label should be suppressed so the
+      // line doesn't read "— 0 tools, 0 tokens".
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      expect(text).toContain("nothing — Nothing [ready]");
+      expect(text).not.toMatch(/nothing — Nothing.*0 tools/);
+    });
+
     it("sorts servers by relevance when context provided", () => {
       const priv = getPrivate(server);
       priv.config = makeConfig([

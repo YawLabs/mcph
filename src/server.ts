@@ -16,6 +16,7 @@ import { initAnalytics, recordConnectEvent, recordDispatchEvent, shutdownAnalyti
 import { formatShadowLine } from "./cli-shadows.js";
 import { type Profile, loadEffectiveProfile, profileAllows } from "./config-loader.js";
 import { ConfigError, fetchConfig } from "./config.js";
+import { estimateFromConnectedTools, estimateFromToolCache, formatCostLabel } from "./cost-estimate.js";
 import { detectMissingCredentials } from "./credentials.js";
 import { type LoadedGuides, loadGuides, renderGuide } from "./guide.js";
 import { ACTIVATION_FAILURE_TTL_MS, type ActivationFailure, healthFactor } from "./health-score.js";
@@ -1038,6 +1039,7 @@ export class ConnectServer {
       }
     }
 
+    let totalContextTokens = 0;
     for (const server of sorted) {
       const connection = this.connections.get(server.namespace);
       const status = connection
@@ -1049,7 +1051,23 @@ export class ConnectServer {
       const score = scores.get(server.namespace);
       const relevance = score && score > 0 ? ` (relevance: ${score.toFixed(2)})` : "";
 
-      lines.push(`  ${server.namespace} — ${server.name} [${status}] (${server.type})${relevance}`);
+      // Token-cost estimate — live for connected servers, tool-cache-
+      // padded for dormant ones. Guides the LLM's activate/skip choice
+      // when context budget is tight. Suppressed when we have nothing
+      // to measure (no cache, no connection yet).
+      let costLabel = "";
+      if (connection && connection.tools.length > 0) {
+        const sample = estimateFromConnectedTools(connection.tools);
+        totalContextTokens += sample.tokens;
+        costLabel = ` — ${formatCostLabel(sample)}`;
+      } else {
+        const cached = this.toolCache.get(server.namespace) ?? server.toolCache;
+        if (cached && cached.length > 0) {
+          costLabel = ` — ${formatCostLabel(estimateFromToolCache(cached))}`;
+        }
+      }
+
+      lines.push(`  ${server.namespace} — ${server.name} [${status}] (${server.type})${relevance}${costLabel}`);
 
       const shadow = formatShadowLine(server);
       if (shadow) lines.push(`    ${shadow}`);
@@ -1074,7 +1092,8 @@ export class ConnectServer {
 
     const activeCount = this.connections.size;
     const totalTools = Array.from(this.connections.values()).reduce((sum, c) => sum + c.tools.length, 0);
-    lines.push(`\n${activeCount} loaded in this session, ${totalTools} tools in context.`);
+    const tokenSummary = totalContextTokens > 0 ? ` (~${totalContextTokens.toLocaleString()} tokens)` : "";
+    lines.push(`\n${activeCount} loaded in this session, ${totalTools} tools in context${tokenSummary}.`);
     lines.push(
       context
         ? "Use mcp_connect_dispatch(intent) to load the best server in one step, or mcp_connect_activate to pick explicitly."
