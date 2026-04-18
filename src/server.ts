@@ -63,7 +63,7 @@ import { initTestRunner, startTestRunner, stopTestRunner } from "./test-runner.j
 import { initToolReport, reportTools } from "./tool-report.js";
 import type { ConnectConfig, UpstreamConnection, UpstreamServerConfig } from "./types.js";
 import { ActivationError, connectToUpstream, disconnectFromUpstream } from "./upstream.js";
-import { buildCoUsageMap, formatReliabilityWarning, formatUsageHint } from "./usage-hints.js";
+import { buildCoUsageMap, formatReliabilityWarning, formatUsageHint, selectFlakyNamespaces } from "./usage-hints.js";
 import { ensureUv } from "./uv-bootstrap.js";
 
 declare const __VERSION__: string;
@@ -2637,24 +2637,13 @@ export class ConnectServer {
     // loaded namespaces with rich per-call telemetry; this surfaces
     // history for servers we AREN'T currently talking to so the LLM /
     // operator knows which ones have been unreliable before reloading
-    // them. Bar is deliberately high (≥3 calls, <80% success) so we
-    // don't shout about a one-off failure.
+    // them. Threshold + sort shared with `mcph doctor` via
+    // selectFlakyNamespaces (see usage-hints.ts).
     const now = Date.now();
-    const flaky = this.learning
-      .entries()
-      .filter(({ namespace, usage }) => {
-        if (this.connections.has(namespace)) return false;
-        if (usage.dispatched < 3) return false;
-        return usage.succeeded / usage.dispatched < 0.8;
-      })
-      .sort((a, b) => {
-        const aRate = a.usage.succeeded / a.usage.dispatched;
-        const bRate = b.usage.succeeded / b.usage.dispatched;
-        if (aRate !== bRate) return aRate - bRate;
-        if (a.usage.dispatched !== b.usage.dispatched) return b.usage.dispatched - a.usage.dispatched;
-        return a.namespace.localeCompare(b.namespace);
-      })
-      .slice(0, 5);
+    const flaky = selectFlakyNamespaces(
+      this.learning.entries().filter(({ namespace }) => !this.connections.has(namespace)),
+      5,
+    );
     if (flaky.length > 0) {
       lines.push("\nCross-session reliability (dormant, <80% success):");
       for (const { namespace, usage } of flaky) {

@@ -36,6 +36,7 @@ import {
 import { parseJsonc } from "./jsonc.js";
 import { userConfigDir } from "./paths.js";
 import { STATE_FILENAME, loadState } from "./persistence.js";
+import { selectFlakyNamespaces } from "./usage-hints.js";
 
 export interface DoctorOptions {
   cwd?: string;
@@ -128,6 +129,12 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorResult>
   // persistence is disabled by env, and otherwise reports the file path
   // + how fresh the snapshot is + how much signal it carries.
   await renderStateSection({ home, env, print });
+
+  // Reliability roll-up — pulls flaky namespaces from the same
+  // state.json the STATE section introspected. Same definition as the
+  // cross-session block in mcp_connect_health, so "flaky" means the
+  // same thing whether you check via the LLM or via the CLI.
+  await renderReliabilitySection({ home, env, print });
 
   // Probe every supported client/scope combo on the current OS.
   const clients = probeClients({ home, os, cwd });
@@ -263,6 +270,39 @@ async function renderStateSection(opts: {
     print(`  last saved:           ${formatRelativeAge(Date.now() - persisted.savedAt)} ago`);
     print(`  learning entries:     ${Object.keys(persisted.learning).length}`);
     print(`  pack history entries: ${persisted.packHistory.length}`);
+  }
+  print("");
+}
+
+// Roll up the flaky-dormant list from persisted state.json. Mirrors the
+// cross-session reliability block in mcp_connect_health so the CLI
+// diagnostic and the LLM-facing health tool agree on what counts as
+// flaky. Silently omitted when persistence is disabled or nothing
+// qualifies — no point printing an empty header.
+async function renderReliabilitySection(opts: {
+  home: string;
+  env: NodeJS.ProcessEnv;
+  print: (s?: string) => void;
+}): Promise<void> {
+  const { home, env, print } = opts;
+  const raw = env.MCPH_DISABLE_PERSISTENCE;
+  const disabled = raw !== undefined && raw !== "" && (raw === "1" || raw.toLowerCase() === "true");
+  if (disabled) return;
+
+  const filePath = join(userConfigDir(home), STATE_FILENAME);
+  const persisted = await loadState(filePath);
+  if (persisted.savedAt === 0) return;
+
+  const entries = Object.entries(persisted.learning).map(([namespace, usage]) => ({ namespace, usage }));
+  const flaky = selectFlakyNamespaces(entries, 5);
+  if (flaky.length === 0) return;
+
+  print("RELIABILITY (dormant, <80% success)");
+  const now = Date.now();
+  for (const { namespace, usage } of flaky) {
+    const rate = Math.round((usage.succeeded / usage.dispatched) * 100);
+    const age = formatRelativeAge(now - usage.lastUsedAt);
+    print(`  ${namespace} — ${usage.dispatched} calls, ${rate}% success, last used ${age} ago`);
   }
   print("");
 }

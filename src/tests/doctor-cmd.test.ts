@@ -311,6 +311,97 @@ describe("runDoctor — STATE section", () => {
   });
 });
 
+describe("runDoctor — RELIABILITY section", () => {
+  it("omits the section entirely when no namespace qualifies", async () => {
+    mkdirSync(join(synthHome, ".mcph"), { recursive: true });
+    writeFileSync(
+      join(synthHome, ".mcph", STATE_FILENAME),
+      JSON.stringify({
+        version: STATE_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        learning: {
+          gh: { dispatched: 10, succeeded: 10, lastUsedAt: Date.now() },
+          linear: { dispatched: 2, succeeded: 0, lastUsedAt: Date.now() },
+        },
+        packHistory: [],
+      }),
+    );
+    const cap = captureOut();
+    await runDoctor({
+      cwd: synthCwd,
+      home: synthHome,
+      env: { MCPH_TOKEN: "mcp_pat_aaaa" },
+      os: "linux",
+      out: cap.out,
+      skipRegistryCheck: true,
+    });
+    expect(cap.text()).not.toMatch(/RELIABILITY/);
+  });
+
+  it("surfaces flaky namespaces sorted worst-rate first, capped at 5", async () => {
+    const now = Date.now();
+    mkdirSync(join(synthHome, ".mcph"), { recursive: true });
+    const learning: Record<string, { dispatched: number; succeeded: number; lastUsedAt: number }> = {
+      solid: { dispatched: 10, succeeded: 10, lastUsedAt: now },
+      mild: { dispatched: 10, succeeded: 7, lastUsedAt: now - 60_000 }, // 70%
+      severe: { dispatched: 5, succeeded: 1, lastUsedAt: now - 120_000 }, // 20%
+      dead: { dispatched: 4, succeeded: 0, lastUsedAt: now - 180_000 }, // 0%
+      zzz: { dispatched: 6, succeeded: 3, lastUsedAt: now }, // 50%
+    };
+    writeFileSync(
+      join(synthHome, ".mcph", STATE_FILENAME),
+      JSON.stringify({ version: STATE_SCHEMA_VERSION, savedAt: now, learning, packHistory: [] }),
+    );
+    const cap = captureOut();
+    await runDoctor({
+      cwd: synthCwd,
+      home: synthHome,
+      env: { MCPH_TOKEN: "mcp_pat_aaaa" },
+      os: "linux",
+      out: cap.out,
+      skipRegistryCheck: true,
+    });
+    const txt = cap.text();
+    expect(txt).toMatch(/RELIABILITY \(dormant, <80% success\)/);
+    // Healthy entries must not appear.
+    expect(txt).not.toMatch(/ {2}solid /);
+    // Ordering: dead (0%) < severe (20%) < zzz (50%) < mild (70%).
+    const deadIdx = txt.indexOf("dead —");
+    const severeIdx = txt.indexOf("severe —");
+    const zzzIdx = txt.indexOf("zzz —");
+    const mildIdx = txt.indexOf("mild —");
+    expect(deadIdx).toBeGreaterThan(-1);
+    expect(deadIdx).toBeLessThan(severeIdx);
+    expect(severeIdx).toBeLessThan(zzzIdx);
+    expect(zzzIdx).toBeLessThan(mildIdx);
+    // Format carries call counts + rate + relative age.
+    expect(txt).toMatch(/dead — 4 calls, 0% success, last used/);
+  });
+
+  it("is skipped when MCPH_DISABLE_PERSISTENCE is set", async () => {
+    mkdirSync(join(synthHome, ".mcph"), { recursive: true });
+    writeFileSync(
+      join(synthHome, ".mcph", STATE_FILENAME),
+      JSON.stringify({
+        version: STATE_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        learning: { flaky: { dispatched: 10, succeeded: 2, lastUsedAt: Date.now() } },
+        packHistory: [],
+      }),
+    );
+    const cap = captureOut();
+    await runDoctor({
+      cwd: synthCwd,
+      home: synthHome,
+      env: { MCPH_TOKEN: "mcp_pat_aaaa", MCPH_DISABLE_PERSISTENCE: "1" },
+      os: "linux",
+      out: cap.out,
+      skipRegistryCheck: true,
+    });
+    expect(cap.text()).not.toMatch(/RELIABILITY/);
+  });
+});
+
 describe("runDoctor — ENVIRONMENT section", () => {
   it("renders every behavior-modifier var with '(not set)' when none are set", async () => {
     const cap = captureOut();

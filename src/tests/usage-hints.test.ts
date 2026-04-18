@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NamespaceUsage } from "../learning.js";
 import type { DetectedPack } from "../pack-detect.js";
-import { buildCoUsageMap, formatReliabilityWarning, formatUsageHint } from "../usage-hints.js";
+import { buildCoUsageMap, formatReliabilityWarning, formatUsageHint, selectFlakyNamespaces } from "../usage-hints.js";
 
 function usage(succeeded: number, dispatched?: number): NamespaceUsage {
   return { succeeded, dispatched: dispatched ?? succeeded, lastUsedAt: 1 };
@@ -93,5 +93,65 @@ describe("formatReliabilityWarning", () => {
 
   it("rounds the success rate to a whole percent", () => {
     expect(formatReliabilityWarning(usage(1, 3))).toBe("reliability: 33% success across 3 past calls");
+  });
+});
+
+describe("selectFlakyNamespaces", () => {
+  it("returns an empty list when the input is empty", () => {
+    expect(selectFlakyNamespaces([], 5)).toEqual([]);
+  });
+
+  it("returns an empty list when limit is zero", () => {
+    expect(selectFlakyNamespaces([{ namespace: "flaky", usage: usage(2, 10) }], 0)).toEqual([]);
+  });
+
+  it("excludes namespaces below the observation floor", () => {
+    const out = selectFlakyNamespaces([{ namespace: "rare", usage: usage(0, 2) }], 5);
+    expect(out).toEqual([]);
+  });
+
+  it("excludes namespaces at or above the 80% success threshold", () => {
+    const out = selectFlakyNamespaces(
+      [
+        { namespace: "solid", usage: usage(8, 10) }, // 80% exactly
+        { namespace: "perfect", usage: usage(5, 5) },
+      ],
+      5,
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("sorts worst-rate first, then highest dispatched, then alpha", () => {
+    const out = selectFlakyNamespaces(
+      [
+        { namespace: "mild", usage: usage(7, 10) }, // 70%
+        { namespace: "severe", usage: usage(1, 5) }, // 20%
+        { namespace: "tied-fewer", usage: usage(1, 2) }, // 50% (below floor, filtered)
+        { namespace: "tied-more", usage: usage(5, 10) }, // 50%
+        { namespace: "tied-most", usage: usage(10, 20) }, // 50%
+      ],
+      5,
+    );
+    const names = out.map((e) => e.namespace);
+    expect(names).toEqual(["severe", "tied-most", "tied-more", "mild"]);
+  });
+
+  it("breaks ties on dispatched+rate by alphabetical namespace", () => {
+    const out = selectFlakyNamespaces(
+      [
+        { namespace: "zeta", usage: usage(5, 10) },
+        { namespace: "alpha", usage: usage(5, 10) },
+      ],
+      5,
+    );
+    expect(out.map((e) => e.namespace)).toEqual(["alpha", "zeta"]);
+  });
+
+  it("caps the result at the given limit", () => {
+    const entries = Array.from({ length: 10 }, (_, i) => ({
+      namespace: `ns${i}`,
+      usage: usage(5, 10),
+    }));
+    expect(selectFlakyNamespaces(entries, 3)).toHaveLength(3);
   });
 });

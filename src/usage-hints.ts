@@ -22,12 +22,12 @@ import type { DetectedPack } from "./pack-detect.js";
 const MAX_PEERS = 3;
 const MIN_SUCCESS_TO_SHOW = 1;
 
-// Thresholds for the dormant-reliability hint. Match the cross-session
-// reliability block in handleHealth so a server either shows up in both
-// places or neither — otherwise the two views disagree about what's
-// flaky and the LLM ends up with a confused picture.
-const RELIABILITY_MIN_OBSERVATIONS = 3;
-const RELIABILITY_THRESHOLD = 0.8;
+// Thresholds for the dormant-reliability hint. Exported so
+// handleHealth and `mcph doctor` can share the same "what counts as
+// flaky" definition — otherwise the various views would disagree about
+// which namespaces qualify and the LLM / operator ends up confused.
+export const RELIABILITY_MIN_OBSERVATIONS = 3;
+export const RELIABILITY_THRESHOLD = 0.8;
 
 // Flatten detected packs into a per-namespace peer list. Each pack is
 // a set of 2-3 namespaces that co-occurred in ≥2 bursts; the map
@@ -92,4 +92,32 @@ export function formatReliabilityWarning(usage: NamespaceUsage | undefined): str
   if (rate >= RELIABILITY_THRESHOLD) return null;
   const pct = Math.round(rate * 100);
   return `reliability: ${pct}% success across ${usage.dispatched} past calls`;
+}
+
+export interface FlakyNamespaceEntry {
+  namespace: string;
+  usage: NamespaceUsage;
+}
+
+// Shared selector for the flaky-namespace lists shown by handleHealth
+// and `mcph doctor`'s RELIABILITY section. Filter rules are the same as
+// formatReliabilityWarning; sort is worst-rate first, tie-break by most
+// calls (more evidence = more credible), then alphabetical so output is
+// deterministic. Caller passes any pre-filter (e.g., handleHealth
+// excludes currently-connected namespaces).
+export function selectFlakyNamespaces(entries: Iterable<FlakyNamespaceEntry>, limit: number): FlakyNamespaceEntry[] {
+  if (limit <= 0) return [];
+  return Array.from(entries)
+    .filter(({ usage }) => {
+      if (usage.dispatched < RELIABILITY_MIN_OBSERVATIONS) return false;
+      return usage.succeeded / usage.dispatched < RELIABILITY_THRESHOLD;
+    })
+    .sort((a, b) => {
+      const aRate = a.usage.succeeded / a.usage.dispatched;
+      const bRate = b.usage.succeeded / b.usage.dispatched;
+      if (aRate !== bRate) return aRate - bRate;
+      if (a.usage.dispatched !== b.usage.dispatched) return b.usage.dispatched - a.usage.dispatched;
+      return a.namespace.localeCompare(b.namespace);
+    })
+    .slice(0, limit);
 }
