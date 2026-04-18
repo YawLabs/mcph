@@ -47,6 +47,7 @@ import {
   routeToolCall,
 } from "./proxy.js";
 import { type Content, pruneContent } from "./prune.js";
+import { findTool, formatReadToolOutput, formatToolNotFound, normalizeToolName } from "./read-tool.js";
 import { type RankableServer, rankServers, scoreRelevance } from "./relevance.js";
 import { initRerank, rerank } from "./rerank.js";
 import { initRuntimeDetect, reportRuntimes } from "./runtime-detect.js";
@@ -591,6 +592,19 @@ export class ConnectServer {
     if (name === META_TOOLS.health.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "health", latencyMs: null, success: true });
       return this.attachGuideNudge(this.handleHealth());
+    }
+    if (name === META_TOOLS.read_tool.name) {
+      const serverArg = typeof args.server === "string" ? args.server : "";
+      const toolArg = typeof args.tool === "string" ? args.tool : "";
+      const result = await this.handleReadTool(serverArg, toolArg, progress);
+      recordConnectEvent({
+        namespace: serverArg || null,
+        toolName: toolArg || null,
+        action: "read_tool",
+        latencyMs: null,
+        success: !result.isError,
+      });
+      return this.attachGuideNudge(result);
     }
     if (name === META_TOOLS.suggest.name) {
       recordConnectEvent({ namespace: null, toolName: null, action: "suggest", latencyMs: null, success: true });
@@ -2028,6 +2042,114 @@ export class ConnectServer {
         code,
       });
       return { content: [{ type: "text", text }], isError: true };
+    }
+  }
+
+  // Signature-on-demand: return one tool's full input schema without
+  // persistently activating its server. When the server is already
+  // loaded we read from the in-memory connection. When it isn't, we
+  // spawn a transient upstream, extract the tool, and disconnect. The
+  // transient path does NOT register the connection in this.connections
+  // or toolRoutes — `mcp_connect_health` and `tools/list` stay unchanged
+  // so the caller's context doesn't grow until they commit via activate.
+  private async handleReadTool(
+    serverArg: string,
+    toolArg: string,
+    progress?: ProgressReporter,
+  ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+    if (!serverArg) {
+      return {
+        content: [{ type: "text", text: "`server` is required (namespace of an installed MCP server)." }],
+        isError: true,
+      };
+    }
+    if (!toolArg) {
+      return { content: [{ type: "text", text: "`tool` is required (name of the tool to inspect)." }], isError: true };
+    }
+
+    const serverConfig = this.config?.servers.find((s) => s.namespace === serverArg && s.isActive);
+    if (!serverConfig) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `"${serverArg}" is not installed on this account. Call mcp_connect_discover to list available servers.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const toolName = normalizeToolName(serverArg, toolArg);
+
+    // Fast path: server already loaded. Schema is already in context,
+    // no network cost.
+    const existing = this.connections.get(serverArg);
+    if (existing && existing.status === "connected") {
+      const tool = findTool(existing.tools, toolName);
+      if (!tool) {
+        return {
+          content: [{ type: "text", text: formatToolNotFound(serverConfig, toolName, existing.tools) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatReadToolOutput({ tool, server: serverConfig, loaded: true }),
+          },
+        ],
+      };
+    }
+
+    // Slow path: transient connect. Same spawn cost as activate, but
+    // we tear down immediately after reading the tool list so the
+    // server doesn't linger in the session.
+    progress?.(`Inspecting "${serverArg}" (transient — not loading into session)…`);
+    let transient: UpstreamConnection | undefined;
+    try {
+      transient = await connectToUpstream(serverConfig);
+    } catch (err) {
+      const message = err instanceof ActivationError ? err.message : err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Could not connect to "${serverArg}" to read tool schema: ${message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      const tool = findTool(transient.tools, toolName);
+      if (!tool) {
+        return {
+          content: [{ type: "text", text: formatToolNotFound(serverConfig, toolName, transient.tools) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatReadToolOutput({ tool, server: serverConfig, loaded: false }),
+          },
+        ],
+      };
+    } finally {
+      // Tear the transient connection down no matter what happened
+      // above. Leaving it open would silently promote "read tool"
+      // into "activate", which is exactly what this meta-tool exists
+      // to avoid.
+      await disconnectFromUpstream(transient).catch((e) =>
+        log("warn", "transient disconnect after read_tool failed", {
+          namespace: serverArg,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
     }
   }
 

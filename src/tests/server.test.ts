@@ -555,6 +555,95 @@ describe("ConnectServer", () => {
     });
   });
 
+  describe("handleReadTool", () => {
+    it("rejects a missing server arg", async () => {
+      const priv = getPrivate(server);
+      const result = await priv.handleReadTool("", "create_issue");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("`server` is required");
+    });
+
+    it("rejects a missing tool arg", async () => {
+      const priv = getPrivate(server);
+      const result = await priv.handleReadTool("gh", "");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("`tool` is required");
+    });
+
+    it("returns a helpful error when the server is not installed", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([]);
+      const result = await priv.handleReadTool("gh", "create_issue");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("not installed on this account");
+    });
+
+    it("reads the schema from a loaded server without reconnecting", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      const conn = makeConnection("gh", ["create_issue"]);
+      conn.tools[0].description = "Create a new issue.";
+      priv.connections.set("gh", conn);
+
+      const result = await priv.handleReadTool("gh", "create_issue");
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain("Tool: gh_create_issue");
+      expect(result.content[0].text).toContain("Server: GitHub (gh)");
+      expect(result.content[0].text).toContain("Create a new issue.");
+      // Loaded-server path must NOT trigger a transient connect.
+      expect(vi.mocked(connectToUpstream)).not.toHaveBeenCalled();
+      expect(vi.mocked(disconnectFromUpstream)).not.toHaveBeenCalled();
+    });
+
+    it("accepts the namespaced tool form", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      priv.connections.set("gh", makeConnection("gh", ["create_issue"]));
+      const result = await priv.handleReadTool("gh", "gh_create_issue");
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain("Tool: gh_create_issue");
+    });
+
+    it("reports tool-not-found with available tools as a hint", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      priv.connections.set("gh", makeConnection("gh", ["close_issue", "create_issue"]));
+
+      const result = await priv.handleReadTool("gh", "nope");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('"nope" not found on "gh"');
+      expect(result.content[0].text).toContain("close_issue");
+      expect(result.content[0].text).toContain("create_issue");
+    });
+
+    it("transiently connects when the server is installed but not loaded, then disconnects", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      const transient = makeConnection("gh", ["create_issue"]);
+      vi.mocked(connectToUpstream).mockResolvedValueOnce(transient);
+
+      const result = await priv.handleReadTool("gh", "create_issue");
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).toContain("Tool: gh_create_issue");
+      expect(result.content[0].text).toContain("not currently loaded");
+      // The transient connection must be torn down and never registered.
+      expect(vi.mocked(connectToUpstream)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(disconnectFromUpstream)).toHaveBeenCalledTimes(1);
+      expect(priv.connections.has("gh")).toBe(false);
+    });
+
+    it("surfaces a clean error when the transient connect fails", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh" })]);
+      vi.mocked(connectToUpstream).mockRejectedValueOnce(new Error("spawn ENOENT npx"));
+
+      const result = await priv.handleReadTool("gh", "create_issue");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("spawn ENOENT npx");
+      expect(priv.connections.has("gh")).toBe(false);
+    });
+  });
+
   describe("handleToolCall", () => {
     it("routes meta-tool discover", async () => {
       const priv = getPrivate(server);
@@ -584,6 +673,14 @@ describe("ConnectServer", () => {
       priv.connections.set("gh", makeConnection("gh"));
       const result = await priv.handleToolCall("mcp_connect_deactivate", { server: "gh" });
       expect(result.content[0].text).toContain('Unloaded "gh"');
+    });
+
+    it("routes meta-tool read_tool", async () => {
+      const priv = getPrivate(server);
+      priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub" })]);
+      priv.connections.set("gh", makeConnection("gh", ["create_issue"]));
+      const result = await priv.handleToolCall("mcp_connect_read_tool", { server: "gh", tool: "create_issue" });
+      expect(result.content[0].text).toContain("Tool: gh_create_issue");
     });
 
     it("routes upstream tool calls and tracks health", async () => {

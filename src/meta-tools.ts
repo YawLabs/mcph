@@ -197,6 +197,33 @@ export const META_TOOLS = {
       openWorldHint: true,
     },
   },
+  read_tool: {
+    name: "mcp_connect_read_tool",
+    description:
+      "Return one tool's full input schema without loading its server into the session. Use this when you need to inspect an MCP tool's arguments before deciding whether to activate its server, or to compare schemas across two tools. For already-loaded servers this is free (schema is in memory). For not-loaded servers mcph spawns a transient upstream connection, reads the schema, and tears the connection down — no tools are added to your context, and `mcp_connect_health` will not show the server as loaded. When you're ready to actually call the tool, pass the server namespace to `mcp_connect_activate` (or use `mcp_connect_dispatch` with the task intent).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        server: {
+          type: "string",
+          description: 'Namespace of the server that exposes the tool (e.g., "gh", "slack").',
+        },
+        tool: {
+          type: "string",
+          description:
+            'Tool name. The namespace prefix is optional — both "create_issue" and "gh_create_issue" are accepted.',
+        },
+      },
+      required: ["server", "tool"],
+    },
+    annotations: {
+      title: "Read Tool Schema",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
   suggest: {
     name: "mcp_connect_suggest",
     description:
@@ -325,5 +352,6 @@ export const META_TOOL_NAMES = new Set([
   META_TOOLS.health.name,
   META_TOOLS.dispatch.name,
   META_TOOLS.install.name,
+  META_TOOLS.read_tool.name,
   META_TOOLS.suggest.name,
 ]);
