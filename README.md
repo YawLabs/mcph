@@ -2,7 +2,14 @@
 
 One install. All your MCP servers. Managed from the cloud.
 
-mcph is an MCP server that orchestrates all your other MCP servers. Configure your servers once on [mcp.hosting](https://mcp.hosting), install mcph in your client, and never hand-edit MCP JSON configs again.
+mcph is an MCP server that fronts every other MCP server you use. Install it once per AI client (Claude Code, Claude Desktop, Cursor, VS Code) and your servers come from your [mcp.hosting](https://mcp.hosting) account instead of a hand-edited `mcpServers` block. It earns its keep when you hit any of these:
+
+- **More than one client or more than one machine.** Add a server once on the dashboard; every client/device picks it up on the next poll. No copy-paste of the same JSON into four config files, no per-machine drift.
+- **Tool-context bloat.** The `dispatch` meta-tool ranks your installed servers against the task at hand and loads only the top match(es). A 30-server account stays at a handful of tools in context at any moment instead of surfacing hundreds by default.
+- **API tokens you'd rather not sit in disk configs.** Credentials live encrypted on mcp.hosting and inject at spawn time. Rotate once — every client picks up the new value. Revoke the mcp.hosting token and every install stops working.
+- **A trust signal before you activate.** Every scored server renders with its A–F compliance grade in `discover`. Set `MCPH_MIN_COMPLIANCE=B` to refuse anything below.
+
+If you use one client on one machine with a handful of servers, `claude mcp add` or hand-editing `mcp.json` is fine — mcph's value shows up when that setup stops scaling.
 
 ## How it works
 
