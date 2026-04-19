@@ -1340,19 +1340,20 @@ export class ConnectServer {
         }
       }
 
-      // Compliance annotation — only surfaces when the filter is active,
-      // since the grade is only interesting RELATIVE to a configured
-      // minimum. Passing graded server → show `[A]` as a reassurance tag;
-      // below-min → spell out the reason inline so the model knows why
-      // it's surfaced but won't be activated. Ungraded servers stay
-      // unannotated (don't clutter lines for servers the backend hasn't
-      // scored yet — most of the current catalog).
+      // Compliance annotation — the grade is a trust signal, so it's
+      // shown unconditionally whenever the backend has scored this
+      // server (A–F). Passing graded server → `[A]` tag. When
+      // MCPH_MIN_COMPLIANCE is set and the grade is below it, replace
+      // the tag with an inline refusal reason so the model knows why
+      // the line is surfaced but won't be activated. Ungraded servers
+      // stay unannotated — don't punish unknown on a catalog where
+      // many entries aren't scored yet.
       let complianceLabel = "";
-      if (minCompliance !== null && server.complianceGrade) {
-        if (passesMinCompliance(server.complianceGrade, minCompliance)) {
-          complianceLabel = ` [${server.complianceGrade}]`;
-        } else {
+      if (server.complianceGrade) {
+        if (minCompliance !== null && !passesMinCompliance(server.complianceGrade, minCompliance)) {
           complianceLabel = ` (grade ${server.complianceGrade} — below MCPH_MIN_COMPLIANCE=${minCompliance}, won't auto-activate)`;
+        } else {
+          complianceLabel = ` [${server.complianceGrade}]`;
         }
       }
 

@@ -614,7 +614,7 @@ describe("ConnectServer", () => {
       expect(text).not.toMatch(/raw — Ungraded.*won't auto-activate/);
     });
 
-    it("omits the filter header and `[grade]` annotations when the env is unset", () => {
+    it("shows `[grade]` tags even when the filter env is unset (trust signal is always on)", () => {
       vi.stubEnv("MCPH_MIN_COMPLIANCE", "");
       const priv = getPrivate(server);
       priv.config = makeConfig([makeServerConfig({ namespace: "gh", name: "GitHub", complianceGrade: "B" })]);
@@ -622,11 +622,24 @@ describe("ConnectServer", () => {
       const result = priv.handleDiscover();
       const text = result.content[0].text;
       expect(text).not.toContain("Compliance filter active");
-      // With the filter off we still don't clutter the line with a
-      // grade tag — the annotation is only interesting relative to a
-      // configured minimum. (Current behavior: `[B]` appears only when
-      // the filter is on. Keep this test honest to that contract.)
-      expect(text).not.toMatch(/gh — GitHub.*\[B\]/);
+      // Grade tag surfaces unconditionally when the backend has scored
+      // the server — a visible A-F mark on every discover output lets
+      // the model factor trust into activation decisions without the
+      // user having to pre-configure a floor.
+      expect(text).toMatch(/gh — GitHub.*\[B\]/);
+    });
+
+    it("leaves ungraded servers unannotated with the filter unset", () => {
+      vi.stubEnv("MCPH_MIN_COMPLIANCE", "");
+      const priv = getPrivate(server);
+      // No complianceGrade on this config — mirrors unscored catalog entries.
+      priv.config = makeConfig([makeServerConfig({ namespace: "raw", name: "Ungraded" })]);
+
+      const result = priv.handleDiscover();
+      const text = result.content[0].text;
+      // Ungraded stays clean — don't invent a placeholder that would
+      // read as a grade to the model.
+      expect(text).not.toMatch(/raw — Ungraded.*\[[A-F]\]/);
     });
   });
 

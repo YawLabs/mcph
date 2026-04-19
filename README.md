@@ -342,6 +342,25 @@ The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.)
 
 `uvx ARGS` is always rewritten to `uv tool run ARGS` at spawn time — so only `uv` needs to be reachable, not `uvx` separately. Fixes Windows setups where one was on PATH and the other wasn't.
 
+## Trust & security
+
+MCP servers are third-party code that you choose to run, and mcph launches them on your machine or calls them over the network. We don't sandbox arbitrary code and we're not an antivirus — that's your OS and network. What mcph gives you is **visibility and a gate**:
+
+- **Compliance grades (A–F)** — the `@yawlabs/mcp-compliance` suite runs 88 behavioral tests against an MCP server and reports a grade. mcp.hosting publishes grades for catalog servers; `mcph servers` shows them, and `mcp_connect_discover` surfaces them inline on every listing (e.g., `github — GitHub [ready] [A]`). Set `MCPH_MIN_COMPLIANCE=B` (or any grade) and `mcp_connect_activate` will refuse to load anything below the floor — the refusal message spells out the grade and the env var to unset. Ungraded servers always pass (don't punish unknown), so audit unknowns yourself with `mcph compliance <target>` before you rely on them.
+- **Source transparency** — `mcph servers` and the mcp.hosting dashboard show the exact `command`, `args`, and `url` each server launches with. Nothing is hidden or wrapped — if a server is `npx -y @example/foo` you see that, and you can trace it back to npm / GitHub / the remote endpoint before installing.
+- **Credentials stay encrypted at rest on mcp.hosting** — API tokens and other secrets you paste into a server's `env` block are encrypted on the backend and injected at spawn time. They don't sit in a committed `.env` file or a client config JSON, and they are never logged. Revoke the mcp.hosting token (Settings → API Tokens) and every install loses access on the next poll.
+- **Response pruning** — `MCPH_PRUNE_RESPONSES` (on by default) redacts large file-blob-shaped content before it reaches your LLM. This cuts the easiest form of cross-server prompt injection (stuffing a giant payload into a tool reply to swamp the model's context) and reduces accidental token burn. Set to `0` to disable.
+- **Namespace isolation** — tools are namespace-prefixed (`gh_create_issue`, never bare `create_issue`), so a server can't impersonate tools from another server it has no business touching. `mcp_connect_read_tool` lets you inspect a tool's schema without loading its server, so you can decide before any code runs.
+
+**What mcph does not try to solve.** mcph does not prevent a server you deliberately installed from doing harmful things inside its own process. It doesn't block outbound network traffic, firewall DNS, analyze source, or pin package hashes. A malicious server you chose to run can call any URL your machine can reach; cross-server prompt injection through tool output is a fundamentally model-layer problem that no orchestrator fully fixes. The defenses that matter for those threats live at the layer below mcph:
+
+- Review the command (`npx -y @scope/pkg`, a remote URL, …) before adding a server. If you don't recognize it, run `mcph compliance <target>` against it first.
+- Run mcph and its spawned servers under a restricted OS user or inside a container if you're handling sensitive data. mcph stays out of your sandbox's way — a restricted user will block egress just like it would for anything else.
+- Keep the mcp.hosting token scoped to the devices that need it. Rotate with `mcph install <client> --token …`; every client picks up the new value.
+- Prefer graded servers when the alternatives are otherwise equivalent. A server that can't pass the compliance suite on basic spec conformance is a worse choice than one that does.
+
+If you find a security issue in mcph itself, email `support@mcp.hosting` — details in [`SECURITY.md`](./SECURITY.md).
+
 ## Requirements
 
 - Node.js 18+
