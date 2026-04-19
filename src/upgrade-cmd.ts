@@ -25,6 +25,8 @@
 
 import { spawn } from "node:child_process";
 
+declare const __VERSION__: string;
+
 export interface UpgradeCommandOptions {
   /** When true, actually spawn the upgrade command (only for global-npm mode). */
   run?: boolean;
@@ -275,9 +277,9 @@ export async function runUpgrade(opts: UpgradeCommandOptions = {}): Promise<Upgr
 }
 
 /** Read the version tsup inlines at build time; falls back to "dev"
- *  for unbuilt runs. Kept defensive — a missing compile-time define
- *  is not a reason to crash. */
+ *  for unbuilt runs. tsup substitutes the bare `__VERSION__`
+ *  identifier; a property access (e.g. `globalThis.__VERSION__`)
+ *  isn't replaced, which left the shipped bundle reporting "dev". */
 function readCurrentVersion(): string {
-  const v = (globalThis as { __VERSION__?: unknown }).__VERSION__;
-  return typeof v === "string" ? v : "dev";
+  return typeof __VERSION__ !== "undefined" ? __VERSION__ : "dev";
 }
