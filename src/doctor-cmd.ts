@@ -272,6 +272,7 @@ async function runDoctorJson(opts: DoctorOptions): Promise<DoctorResult> {
     "MCPH_SERVER_CAP",
     "MCPH_MIN_COMPLIANCE",
     "MCPH_AUTO_LOAD",
+    "MCPH_AUTO_ACTIVATE",
     "MCPH_PRUNE_RESPONSES",
   ] as const;
   const envOverrides: Record<string, string | null> = {};
@@ -387,6 +388,7 @@ function renderEnvSection(opts: {
     { name: "MCPH_SERVER_CAP", defaultHint: "default 6" },
     { name: "MCPH_MIN_COMPLIANCE", defaultHint: "filter inactive" },
     { name: "MCPH_AUTO_LOAD", defaultHint: "auto-load inactive" },
+    { name: "MCPH_AUTO_ACTIVATE", defaultHint: "default on" },
     { name: "MCPH_PRUNE_RESPONSES", defaultHint: "pruning active" },
   ];
   const widest = vars.reduce((m, v) => Math.max(m, v.name.length), 0);

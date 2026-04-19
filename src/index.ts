@@ -103,10 +103,12 @@ if (subcommand === "compliance") {
     3. Verify setup     mcph doctor
 
   Setup:
-    install <client>         Auto-edit an MCP client's config to launch mcph.
-                             Clients: claude-code | claude-desktop | cursor | vscode.
-    install --list           Detect MCP clients on this machine (read-only).
-    install --all            Install into every detected client in one shot.
+    install <client>         Configure one MCP client to launch mcph.
+                             <client> is one of: claude-code, claude-desktop,
+                             cursor, vscode.
+    install --list           List which MCP clients are installed on this
+                             machine (read-only; no writes).
+    install --all            Configure every installed MCP client in one go.
 
   Inspection:
     doctor                   Diagnose setup: config, token, clients, learning,
@@ -145,13 +147,17 @@ if (subcommand === "compliance") {
     MCPH_SERVER_CAP            Max concurrently active servers (default 6).
     MCPH_MIN_COMPLIANCE        Minimum grade to auto-activate (A|B|C|D|F).
     MCPH_AUTO_LOAD             Load all servers at startup, ignoring SERVER_CAP.
+    MCPH_AUTO_ACTIVATE         Set to \`0\` to disable discover's auto-activate
+                               gate (default: a clearly-winning server is
+                               activated in the same call).
     MCPH_PRUNE_RESPONSES       Set to \`0\` to disable response pruning.
     MCPH_DISABLE_PERSISTENCE   Disable cross-session learning state.
 
   Config resolution (highest precedence first):
     1. MCPH_TOKEN / MCPH_URL env vars
     2. <project>/.mcph/config.local.json   machine-local overrides (gitignore)
-    3. <project>/.mcph/config.json         project-shared (checked in)
+    3. <project>/.mcph/config.json         project-shared (checked in; never
+                                           put a token here — apiBase only)
     4. ~/.mcph/config.json                 user-global default
 
   Token rotation: mcph reads config at startup. Restart the MCP client
