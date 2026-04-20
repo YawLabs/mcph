@@ -81,8 +81,25 @@ const CORPUS: RankableServer[] = [
   {
     namespace: "fetch",
     name: "Fetch",
-    description: "Fetch web pages — download HTML or JSON from any URL",
-    tools: [{ name: "fetch", description: "GET a URL and return its body" }],
+    description:
+      "HTTP fetch for agents — GET/POST/PUT/PATCH/DELETE, HTML to markdown, reader-mode article extraction, page metadata (opengraph, twitter cards, JSON-LD), outbound link extraction, XML sitemap parsing, RSS and Atom feed parsing, robots.txt verdicts. SSRF-protected.",
+    tools: [
+      { name: "http_get", description: "GET a URL and return the response body" },
+      { name: "http_post", description: "POST a JSON or raw body to a URL" },
+      { name: "http_put" },
+      { name: "http_patch" },
+      { name: "http_delete" },
+      { name: "http_head" },
+      { name: "http_options" },
+      { name: "fetch_html_to_markdown", description: "Download a web page and convert to clean markdown" },
+      { name: "fetch_html_to_text" },
+      { name: "fetch_reader", description: "Reader-mode: isolate the main article body from a page" },
+      { name: "fetch_meta", description: "Extract opengraph, twitter, JSON-LD metadata from a URL" },
+      { name: "fetch_links", description: "Extract every outbound link from a page" },
+      { name: "fetch_sitemap", description: "Parse an XML sitemap (gzipped and sitemap-index supported)" },
+      { name: "fetch_feed", description: "Parse an RSS 2.0 or Atom 1.0 feed" },
+      { name: "fetch_robots", description: "Parse robots.txt and return allow/disallow verdict for a path" },
+    ],
   },
   {
     namespace: "filesystem",
@@ -145,7 +162,7 @@ const CORPUS: RankableServer[] = [
   },
 ];
 
-// 10 varied intents a real user might give Claude. Each names the
+// Varied intents a real user might give Claude. Each names the
 // expected top-match namespace. Intents deliberately avoid including
 // the namespace string itself in the query (that would be trivial) —
 // they lean on the description/tools metadata instead.
@@ -160,6 +177,11 @@ const BENCHMARK: Array<{ intent: string; expected: string }> = [
   { intent: "search the web for recent news about llms", expected: "brave_search" },
   { intent: "what time is it in Tokyo right now", expected: "time" },
   { intent: "look up the latest unresolved error events in our project", expected: "sentry" },
+  // fetch-mcp v0.2.0 expanded surface — each intent targets a different sub-tool.
+  { intent: "parse the xml sitemap for example.com", expected: "fetch" },
+  { intent: "extract the main article body from this blog post url", expected: "fetch" },
+  { intent: "get the opengraph metadata from this page url", expected: "fetch" },
+  { intent: "parse the rss feed at blog.example.com/feed.xml", expected: "fetch" },
 ];
 
 function topN(intent: string, n: number): string[] {

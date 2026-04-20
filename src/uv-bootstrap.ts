@@ -10,10 +10,10 @@ import { cacheDir } from "./paths.js";
 
 // Ship the default catalog on the premise that "if mcph runs, every
 // server in Explore runs." That means we have to handle Python-based
-// servers (fetch, sqlite, time, sentry) without forcing users to
-// install `uv` first. On first encounter with a `uv`/`uvx` command
-// we fetch Astral's standalone `uv` binary into our cache and spawn
-// from there.
+// servers (sqlite, time, sentry, and other uvx-launched entries)
+// without forcing users to install `uv` first. On first encounter
+// with a `uv`/`uvx` command we fetch Astral's standalone `uv` binary
+// into our cache and spawn from there.
 //
 // Lazy: nothing happens until a Python server is actually added.
 // Memoized: concurrent Python server activations share one download.

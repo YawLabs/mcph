@@ -345,7 +345,7 @@ The detection is best-effort: each probe has a 3-second timeout and missing runt
 
 ### Automatic `uv` bootstrap
 
-The popular Python-based MCP servers (`fetch`, `sqlite`, `time`, `sentry`, etc.) all launch via Astral's `uv`/`uvx`. mcph ships its own bootstrap for these: on first encounter with a `uv`/`uvx` command, if the binary isn't on your PATH, mcph lazily downloads Astral's standalone `uv` release, verifies the sha256, and caches it under the platform-appropriate cache dir. Subsequent loads reuse the cached binary. If you already have `uv` installed, mcph uses your version and never downloads.
+The popular Python-based MCP servers (`sqlite`, `time`, `sentry`, and other uvx-launched entries) all launch via Astral's `uv`/`uvx`. mcph ships its own bootstrap for these: on first encounter with a `uv`/`uvx` command, if the binary isn't on your PATH, mcph lazily downloads Astral's standalone `uv` release, verifies the sha256, and caches it under the platform-appropriate cache dir. Subsequent loads reuse the cached binary. If you already have `uv` installed, mcph uses your version and never downloads.
 
 `uvx ARGS` is always rewritten to `uv tool run ARGS` at spawn time — so only `uv` needs to be reachable, not `uvx` separately. Fixes Windows setups where one was on PATH and the other wasn't.
 
